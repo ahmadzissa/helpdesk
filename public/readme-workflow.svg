@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="420" viewBox="0 0 1200 420" role="img" aria-labelledby="title desc">
+  <title id="title">From customer email to resolution</title>
+  <desc id="desc">Customer email flows through IMAP into a Relay ticket. The team assigns, discusses, and replies through SMTP. The scheduler and queue workers support mail syncing, automations, and follow-ups.</desc>
+  <defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="m0 0 10 5-10 5z" fill="#9276bd"/></marker></defs>
+  <rect width="1200" height="420" rx="24" fill="#faf8fc"/>
+  <g font-family="Segoe UI, Arial, sans-serif">
+    <text x="48" y="59" font-size="28" font-weight="700" fill="#34284b">From the first email to the next reply</text>
+    <text x="48" y="91" font-size="18" fill="#655775">One conversation, with the context your team needs.</text>
+    <rect x="48" y="142" width="240" height="130" rx="16" fill="#fff" stroke="#ded5eb"/>
+    <rect x="480" y="142" width="240" height="130" rx="16" fill="#7450bb"/>
+    <rect x="912" y="142" width="240" height="130" rx="16" fill="#fff" stroke="#ded5eb"/>
+    <path d="M300 207h166M732 207h166" fill="none" stroke="#9276bd" stroke-width="3" marker-end="url(#arrow)"/>
+    <g text-anchor="middle">
+      <text x="168" y="192" font-size="24" font-weight="700" fill="#34284b">Customer email</text>
+      <text x="168" y="226" font-size="17" fill="#655775">A question or a follow-up</text>
+      <text x="382" y="190" font-size="16" fill="#655775">IMAP import</text>
+      <text x="600" y="184" font-size="24" font-weight="700" fill="#fff">Relay ticket</text>
+      <text x="600" y="217" font-size="17" fill="#fff">Assign · Discuss · Reply</text>
+      <text x="600" y="246" font-size="16" fill="#f0e8fb">History stays together</text>
+      <text x="814" y="190" font-size="16" fill="#655775">SMTP delivery</text>
+      <text x="1032" y="192" font-size="24" font-weight="700" fill="#34284b">Customer reply</text>
+      <text x="1032" y="226" font-size="17" fill="#655775">Sent from your mailbox</text>
+    </g>
+    <rect x="48" y="316" width="1104" height="62" rx="12" fill="#eee7f6"/>
+    <text x="600" y="354" text-anchor="middle" font-size="19" fill="#57436f">Scheduler + queue workers: mail sync, automations, follow-ups, and retention</text>
+  </g>
+</svg>
