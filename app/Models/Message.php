@@ -32,7 +32,14 @@ class Message extends Model
 
     protected function casts(): array
     {
-        return ['attachments' => 'array', 'translation_context' => 'array'];
+        return ['attachments' => 'array', 'translation_context' => 'array', 'sent_at' => 'datetime'];
+    }
+
+    protected static function booted(): void
+    {
+        static::created(function (Message $message): void {
+            Ticket::whereKey($message->ticket_id)->update(['workflow_activity_at' => now()]);
+        });
     }
 
     public function ticket(): BelongsTo

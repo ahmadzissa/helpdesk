@@ -30,6 +30,12 @@ class Ticket extends Model
     protected static function booted(): void
     {
         static::saving(function (Ticket $ticket): void {
+            if (! $ticket->exists || $ticket->isDirty('status')) {
+                $ticket->status_changed_at = now();
+            }
+            if (! $ticket->exists || $ticket->isDirty(['subject', 'requester_name', 'requester_email', 'company', 'status', 'priority', 'folder', 'source', 'mailbox_id', 'team_id', 'assignee_id', 'tags', 'cc', 'custom_fields'])) {
+                $ticket->workflow_activity_at = now();
+            }
             if (! $ticket->exists || $ticket->isDirty('folder')) {
                 $ticket->trashed_at = $ticket->folder === 'trash' ? now() : null;
                 $ticket->spammed_at = $ticket->folder === 'spam' ? now() : null;
@@ -59,7 +65,7 @@ class Ticket extends Model
 
     protected function casts(): array
     {
-        return ['tags' => 'array', 'cc' => 'array', 'custom_fields' => 'array', 'unread' => 'boolean', 'last_activity_at' => 'datetime', 'resolved_at' => 'datetime', 'trashed_at' => 'datetime', 'spammed_at' => 'datetime'];
+        return ['tags' => 'array', 'cc' => 'array', 'custom_fields' => 'array', 'unread' => 'boolean', 'last_activity_at' => 'datetime', 'resolved_at' => 'datetime', 'trashed_at' => 'datetime', 'spammed_at' => 'datetime', 'status_changed_at' => 'datetime', 'workflow_activity_at' => 'datetime'];
     }
 
     public const STATUSES = ['Open', 'Pending', 'On hold', 'Solved', 'Closed'];

@@ -11,7 +11,7 @@ use Illuminate\Support\Facades\DB;
 
 class WorkflowActions
 {
-    public const TYPES = ['status', 'priority', 'folder', 'assignee_id', 'team_id', 'add_tag', 'remove_tag', 'reply_id', 'note', 'follow_up'];
+    public const TYPES = ['status', 'priority', 'folder', 'assignee_id', 'team_id', 'add_tag', 'remove_tag', 'reply_id', 'note', 'follow_up', 'send_message', 'send_follow_up'];
 
     public static function normalize(array $actions): array
     {
@@ -28,7 +28,7 @@ class WorkflowActions
         return $result;
     }
 
-    public function apply(Ticket $ticket, array $actions, string $label, ?int $userId = null): void
+    public function apply(Ticket $ticket, array $actions, string $label, ?int $userId = null, ?int $automationId = null): void
     {
         $ticket->assertWritable();
         foreach (self::normalize($actions) as $action) {
@@ -48,9 +48,20 @@ class WorkflowActions
                 $this->message($ticket, $reply->body, false, $label, $userId);
             } elseif ($type === 'note') {
                 $this->message($ticket, $value, true, $label, $userId);
+            } elseif ($type === 'send_message') {
+                $this->message($ticket, $value, false, $label, $userId);
+            } elseif ($type === 'send_follow_up') {
+                $message = $this->message($ticket, $value, false, $label, $userId);
+                DB::table('follow_ups')->insert([
+                    'ticket_id' => $ticket->id, 'user_id' => $userId, 'automation_id' => $automationId,
+                    'body' => $message->body, 'due_at' => now(), 'cancel_on_reply' => false,
+                    'inbound_message_id' => $ticket->messages()->where('kind', 'inbound')->max('id') ?? 0,
+                    'state' => 'processed', 'message_id' => $message->id, 'result' => $message->delivery,
+                    'created_at' => now(), 'updated_at' => now(),
+                ]);
             } elseif ($type === 'follow_up') {
                 DB::table('follow_ups')->insert([
-                    'ticket_id' => $ticket->id, 'user_id' => $userId, 'body' => AutomationEngine::expand($action['body'], $ticket),
+                    'ticket_id' => $ticket->id, 'user_id' => $userId, 'automation_id' => $automationId, 'body' => AutomationEngine::expand($action['body'], $ticket),
                     'due_at' => now()->addMinutes((int) $value), 'cancel_on_reply' => true,
                     'inbound_message_id' => $ticket->messages()->where('kind', 'inbound')->max('id') ?? 0,
                     'state' => 'pending', 'created_at' => now(), 'updated_at' => now(),

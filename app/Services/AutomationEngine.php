@@ -21,7 +21,7 @@ class AutomationEngine
             }
             foreach (Automation::where('enabled', true)->where('trigger', $trigger)->orderBy('id')->get() as $rule) {
                 $ticket->refresh();
-                if ($ticket->folder !== 'inbox' || ! app(WorkflowConditions::class)->matches($ticket, $rule->conditions ?? [])) {
+                if ($ticket->folder !== 'inbox' || ! app(WorkflowConditions::class)->matches($ticket, $rule->conditions ?? [], $rule->id)) {
                     continue;
                 }
                 $runs = DB::table('automation_runs')->where('automation_id', $rule->id)->where('ticket_id', $ticket->id);
@@ -39,7 +39,7 @@ class AutomationEngine
                 if (! DB::table('automation_runs')->insertOrIgnore(['automation_id' => $rule->id, 'ticket_id' => $ticket->id, 'run_key' => $runKey, 'created_at' => now()])) {
                     continue;
                 }
-                app(WorkflowActions::class)->apply($ticket, $rule->actions, $rule->name);
+                app(WorkflowActions::class)->apply($ticket, $rule->actions, $rule->name, automationId: $rule->id);
                 Activity::create(['ticket_id' => $ticket->id, 'description' => 'Automation “'.$rule->name.'” ran on #'.$ticket->id]);
             }
         }, 5);
@@ -47,6 +47,6 @@ class AutomationEngine
 
     public static function expand(string $body, Ticket $ticket, string $agent = 'The team'): string
     {
-        return strtr($body, ['{{name}}' => $ticket->requester_name ?: $ticket->requester_email, '{{email}}' => $ticket->requester_email, '{{ticket_id}}' => (string) $ticket->id, '{{subject}}' => $ticket->subject, '{{agent}}' => $agent]);
+        return strtr($body, ['{{name}}' => $ticket->requester_name ?: $ticket->requester_email, '{{ticket.requesterName}}' => $ticket->requester_name ?: $ticket->requester_email, '{{email}}' => $ticket->requester_email, '{{ticket_id}}' => (string) $ticket->id, '{{subject}}' => $ticket->subject, '{{agent}}' => $agent]);
     }
 }

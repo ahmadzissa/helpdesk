@@ -8,20 +8,34 @@ return new class extends Migration
 {
     public function up(): void
     {
-        Schema::table('tickets', function (Blueprint $table) {
+        Schema::whenTableDoesntHaveColumn('tickets', 'merged_into_id', function (Blueprint $table): void {
             $table->foreignId('merged_into_id')->nullable()->constrained('tickets')->restrictOnDelete();
+        });
+        Schema::whenTableDoesntHaveColumn('tickets', 'event_version', function (Blueprint $table): void {
             $table->unsignedBigInteger('event_version')->default(0);
         });
-        Schema::table('automations', function (Blueprint $table) {
+        Schema::whenTableDoesntHaveColumn('automations', 'repeat_mode', function (Blueprint $table): void {
             $table->string('repeat_mode')->default('once');
+        });
+        Schema::whenTableDoesntHaveColumn('automations', 'interval_minutes', function (Blueprint $table): void {
             $table->unsignedInteger('interval_minutes')->default(60);
+        });
+        Schema::whenTableDoesntHaveColumn('automations', 'max_runs', function (Blueprint $table): void {
             $table->unsignedInteger('max_runs')->default(100);
         });
-        Schema::table('automation_runs', function (Blueprint $table) {
-            $table->dropUnique(['automation_id', 'ticket_id']);
+        Schema::whenTableDoesntHaveColumn('automation_runs', 'run_key', function (Blueprint $table): void {
             $table->string('run_key', 80)->default('once');
-            $table->unique(['automation_id', 'ticket_id', 'run_key']);
         });
+        if (! Schema::hasIndex('automation_runs', ['automation_id', 'ticket_id', 'run_key'], 'unique')) {
+            Schema::table('automation_runs', function (Blueprint $table): void {
+                $table->unique(['automation_id', 'ticket_id', 'run_key']);
+            });
+        }
+        if (Schema::hasIndex('automation_runs', 'automation_runs_automation_id_ticket_id_unique')) {
+            Schema::table('automation_runs', function (Blueprint $table): void {
+                $table->dropUnique(['automation_id', 'ticket_id']);
+            });
+        }
         Schema::create('macros', function (Blueprint $table) {
             $table->id();
             $table->string('name', 120);
@@ -125,6 +139,11 @@ return new class extends Migration
         Schema::table('mail_delivery_attempts', fn (Blueprint $table) => $table->dropColumn(['recipients', 'sent_at', 'delivered_at', 'opened_at']));
         foreach (['api_ticket_requests', 'api_keys', 'inline_images', 'recipient_suppressions', 'sender_rules', 'follow_ups', 'macro_runs', 'macros'] as $name) {
             Schema::dropIfExists($name);
+        }
+        if (! Schema::hasIndex('automation_runs', ['automation_id', 'ticket_id'])) {
+            Schema::table('automation_runs', function (Blueprint $table): void {
+                $table->index(['automation_id', 'ticket_id']);
+            });
         }
         Schema::table('automation_runs', fn (Blueprint $table) => $table->dropUnique(['automation_id', 'ticket_id', 'run_key']));
         // Keep historical runs on rollback; the old application checks the pair before acting.

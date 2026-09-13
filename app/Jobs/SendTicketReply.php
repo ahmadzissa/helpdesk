@@ -62,7 +62,8 @@ class SendTicketReply implements ShouldQueue
                     $mail->attach(Storage::disk('local')->path($file['path']), ['as' => $file['name']]);
                 }
             });
-            Message::whereKey($this->message->id)->where('delivery', 'sending')->where('attempt_id', $this->message->attempt_id)->update(['delivery' => 'sent', 'delivery_error' => null]);
+            Message::whereKey($this->message->id)->where('delivery', 'sending')->where('attempt_id', $this->message->attempt_id)->update(['delivery' => 'sent', 'delivery_error' => null, 'sent_at' => now()]);
+            $ticket->forceFill(['workflow_activity_at' => now()])->save();
             DB::table('mail_delivery_attempts')->where('id', $this->message->attempt_id)->update(['sent_at' => now()]);
         } catch (Throwable $exception) {
             $safety->recordFailure($this->message->attempt_id, 'smtp', 'SMTP delivery failed. Check the mailbox connection settings and recipient address.');
