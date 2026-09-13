@@ -23,24 +23,20 @@ class EmailContent
             return Message::renderBody($translatedBody ?? $message->body, $message->kind);
         }
 
+        if ($translatedBody !== null) {
+            $translatedBody = $this->withoutTrackingLabels($translatedBody, $message);
+        }
         $html = $translatedBody === null ? $message->email_html : ($format === 'html' ? $translatedBody : null);
         if (! $html) {
-            $html = Str::markdown($translatedBody ?? $message->body, ['html_input' => 'escape', 'allow_unsafe_links' => false, 'renderer' => ['soft_break' => '<br />']]);
+            $html = Str::markdown($this->text($message, $translatedBody), ['html_input' => 'escape', 'allow_unsafe_links' => false, 'renderer' => ['soft_break' => '<br />']]);
         }
 
-        return $this->sanitize($html, $message);
+        return $this->sanitize(app(EmailReplyContent::class)->html($html), $message);
     }
 
     public function sanitize(string $html, Message $message): string
     {
-        $document = new DOMDocument('1.0', 'UTF-8');
-        $previous = libxml_use_internal_errors(true);
-        try {
-            $document->loadHTML('<?xml encoding="UTF-8"><html><body>'.mb_substr($html, 0, 500000).'</body></html>', LIBXML_NONET | LIBXML_NOERROR | LIBXML_NOWARNING);
-        } finally {
-            libxml_clear_errors();
-            libxml_use_internal_errors($previous);
-        }
+        $document = $this->document($html);
         $output = new DOMDocument('1.0', 'UTF-8');
         $root = $output->appendChild($output->createElement('div'));
         foreach ($document->getElementsByTagName('body') as $body) {
@@ -55,6 +51,45 @@ class EmailContent
         }
 
         return $result;
+    }
+
+    public function text(Message $message, ?string $body = null): string
+    {
+        $body ??= $message->body;
+        if ($message->kind !== 'inbound') {
+            return $body;
+        }
+
+        return app(EmailReplyContent::class)->text($this->withoutTrackingLabels($body, $message));
+    }
+
+    public function withoutTrackingLabels(string $body, Message $message): string
+    {
+        if ($message->kind !== 'inbound' || ! $message->email_html) {
+            return $body;
+        }
+        foreach ($this->document($message->email_html)->getElementsByTagName('img') as $image) {
+            $label = trim($image->getAttribute('alt'));
+            if ($label !== '' && $this->trackingPixel($image)) {
+                $body = str_replace('['.$label.']', '', $body);
+            }
+        }
+
+        return $body;
+    }
+
+    private function document(string $html): DOMDocument
+    {
+        $document = new DOMDocument('1.0', 'UTF-8');
+        $previous = libxml_use_internal_errors(true);
+        try {
+            $document->loadHTML('<?xml encoding="UTF-8"><html><body>'.mb_substr($html, 0, 500000).'</body></html>', LIBXML_NONET | LIBXML_NOERROR | LIBXML_NOWARNING);
+        } finally {
+            libxml_clear_errors();
+            libxml_use_internal_errors($previous);
+        }
+
+        return $document;
     }
 
     private function copy(DOMNode $node, DOMNode $parent, Message $message): void
@@ -94,6 +129,9 @@ class EmailContent
                 return;
             }
             $element->setAttribute('alt', mb_substr($node->getAttribute('alt') ?: 'Email image', 0, 200));
+            if ($node->hasAttribute('title')) {
+                $element->setAttribute('title', mb_substr($node->getAttribute('title'), 0, 200));
+            }
             $element->setAttribute('loading', 'lazy');
             $element->setAttribute('referrerpolicy', 'no-referrer');
             $width = $node->getAttribute('width');

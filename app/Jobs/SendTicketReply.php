@@ -3,6 +3,7 @@
 namespace App\Jobs;
 
 use App\Models\Message;
+use App\Services\EmailHeaders;
 use App\Services\MailSafety;
 use App\Services\OutgoingMail;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -39,12 +40,12 @@ class SendTicketReply implements ShouldQueue
         try {
             $externalId = $this->message->external_id;
             $mailer = app(OutgoingMail::class)->mailer($mailbox);
-            $mailer->raw($this->message->body, function (\Illuminate\Mail\Message $mail) use ($ticket, $mailbox, $externalId) {
+            $mailer->raw(app(OutgoingMail::class)->text($this->message), function (\Illuminate\Mail\Message $mail) use ($ticket, $mailbox, $externalId) {
                 $email = $mail->getSymfonyMessage();
                 $email->html(app(OutgoingMail::class)->html($this->message, $email));
                 $email->getHeaders()->addIdHeader('Message-ID', $externalId);
-                $parent = $ticket->messages()->where('kind', 'inbound')->whereNotNull('external_id')->reorder()->latest('id')->first();
-                if ($parent) {
+                $parent = app(OutgoingMail::class)->previousMessage($this->message);
+                if ($parent?->external_id) {
                     $email->getHeaders()->addIdHeader('In-Reply-To', $parent->external_id);
                 }
                 if ($this->message->rule_name) {
@@ -52,7 +53,7 @@ class SendTicketReply implements ShouldQueue
                 }
                 $attempt = DB::table('mail_delivery_attempts')->where('id', $this->message->attempt_id)->firstOrFail();
                 $recipients = json_decode($attempt->recipients, true);
-                $mail->to($attempt->recipient)->from($mailbox->email, $mailbox->name)->replyTo($mailbox->email)->subject('Re: '.($this->message->translated_subject ?? $ticket->subject).' [#'.$ticket->id.']');
+                $mail->to($attempt->recipient)->from($mailbox->email, $mailbox->name)->replyTo($mailbox->email)->subject('Re: '.app(EmailHeaders::class)->decode($this->message->translated_subject ?? $ticket->subject).' [#'.$ticket->id.']');
                 $cc = array_values(array_diff($recipients, [$attempt->recipient]));
                 if ($cc !== []) {
                     $mail->cc($cc);

@@ -36,14 +36,27 @@ test('HTML translation preserves layout, links, image references and encodes pro
     const calls = [];
     const translate = createTranslator({ fetchImpl: async (url, options) => {
         const input = JSON.parse(options.body)[0][0];
-        calls.push(input);
-        return { ok: true, json: async () => [[input.replace('Hola', 'Hello').replace('equipo', '<team>')], ['es']] };
+        calls.push(...input);
+        return { ok: true, json: async () => [input.map(text => text.replace('Hola', 'Hello').replace('equipo', '<team>')), ['es']] };
     } });
     const original = '<div dir="rtl"><p>Hola &amp; <b>equipo</b></p><a href="https://example.com/?a=1&amp;b=2">https://example.com/?a=1&amp;b=2</a><img data-email-src="https://example.com/picture.png" alt="Picture"><img src="/api/v1/attachments/7/0/inline"><table><tr><td>Hola</td></tr></table></div>';
     const result = await translate(original, { key: 'synthetic-key', format: 'html' });
     assert.equal(result.text, original.replaceAll('Hola', 'Hello').replace('equipo', '&lt;team&gt;'));
     assert.equal(result.sourceLanguage, 'es');
     assert.ok(calls.every(input => !input.includes('<') && !input.includes('https://') && !input.includes('attachments')));
+});
+
+test('HTML image titles and alt text join the message batch while code and attributes stay untouched', async () => {
+    let calls = 0;
+    const translate = createTranslator({ fetchImpl: async (url, options) => {
+        calls++;
+        assert.deepEqual(JSON.parse(options.body)[0][0], ['Hola', 'captura', 'A &gt; B']);
+        return { ok: true, json: async () => [['Hello', 'screenshot', 'Translated > title'], ['es']] };
+    } });
+    const html = '<p>Hola</p><img src="https://example.com/image.png" alt="captura" title="A > B"><pre><code>const hello = "Hola";</code></pre>';
+    const result = await translate(html, { key: 'synthetic-key', format: 'html' });
+    assert.equal(calls, 1);
+    assert.equal(result.text, html.replace('<p>Hola', '<p>Hello').replace('alt="captura"', 'alt="screenshot"').replace('title="A > B"', 'title="Translated &gt; title"'));
 });
 
 test('incoming attachment images keep working under the XAMPP subdirectory', () => {

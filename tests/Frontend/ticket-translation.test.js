@@ -26,7 +26,7 @@ function mount(google, makeFixture = fixture) {
     app.mount({});
     return { ticket, body, privateNote, translation, stop: () => app.unmount() };
 }
-const echoGoogle = async (url, options) => ({ ok: true, json: async () => [['ES: ' + JSON.parse(options.body)[0][0]], ['en']] });
+const echoGoogle = async (url, options) => ({ ok: true, json: async () => [JSON.parse(options.body)[0][0].map(text => 'ES: ' + text), ['en']] });
 
 test('the Vue composer invalidates a preview immediately after editing the original or switching to a note', async () => {
     const mounted = mount(echoGoogle);
@@ -64,6 +64,48 @@ test('a Google failure stays visible in the composer and cannot produce a sendab
         assert.equal(await mounted.translation.prepare(), false);
         assert.match(mounted.translation.translationError.value, /quota/);
         assert.equal(mounted.translation.previewReady.value, false);
+    } finally { mounted.stop(); }
+});
+
+test('automatic mode can translate and continue sending in one action in the customer language', async () => {
+    let calls = 0;
+    const mounted = mount(async (url, options) => {
+        calls++;
+        assert.equal(JSON.parse(options.body)[0][2], 'es');
+        return echoGoogle(url, options);
+    });
+    state.workspace.translation.auto_send = true;
+    try {
+        assert.equal(await mounted.translation.prepareToSend(), true);
+        assert.equal(mounted.translation.preview.value.body, 'ES: Hello, we can help.');
+        assert.equal(mounted.translation.preview.value.subject, 'My order');
+        assert.equal(calls, 1);
+    } finally { mounted.stop(); }
+});
+
+test('review mode pauses after translation and private notes skip translation', async () => {
+    let calls = 0;
+    const mounted = mount(async (url, options) => { calls++; return echoGoogle(url, options); });
+    try {
+        assert.equal(await mounted.translation.prepareToSend(), false);
+        assert.equal(await mounted.translation.prepareToSend(), true);
+        mounted.privateNote.value = true;
+        assert.equal(await mounted.translation.prepareToSend(), true);
+        assert.equal(calls, 1);
+    } finally { mounted.stop(); }
+});
+
+test('automatic translation failures keep the draft and allow a successful retry', async () => {
+    let fail = true;
+    const mounted = mount(async (url, options) => fail ? { ok: false, status: 429 } : echoGoogle(url, options));
+    state.workspace.translation.auto_send = true;
+    try {
+        assert.equal(await mounted.translation.prepareToSend(), false);
+        assert.equal(mounted.body.value, 'Hello, we can help.');
+        assert.match(mounted.translation.translationError.value, /quota/);
+        fail = false;
+        assert.equal(await mounted.translation.prepareToSend(), true);
+        assert.equal(mounted.translation.translationError.value, '');
     } finally { mounted.stop(); }
 });
 

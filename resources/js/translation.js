@@ -31,14 +31,34 @@ export function decodeEntities(value) {
     });
 }
 const protectedPattern = /\x60{3}[\s\S]*?\x60{3}|\x60[^\x60\r\n]*\x60|!\[[^\]]*\]\([^)\r\n]+\)|https?:\/\/[^\s<>"')]+|\/api\/v1\/inline-images\/[a-f0-9-]{36}|[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}|\r?\n[ \t]*/gi;
-const htmlPattern = /<[^>]*>/g;
+const htmlPattern = /<(?:[^"'<>]|"[^"]*"|'[^']*')*>/g;
+const imagePattern = /!\[([^\]]*)\]\(([^)\r\n]+)\)/g;
+const imageAttributes = /\b(alt|title)(\s*=\s*)(["'])(.*?)\3/gi;
+const escapeHtml = text => text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+function imageTagSegments(tag) {
+    const result = [];
+    let cursor = 0;
+    for (const match of tag.matchAll(imageAttributes)) {
+        const start = match.index + match[1].length + match[2].length + 1;
+        result.push({ text: tag.slice(cursor, start), literal: true });
+        result.push(...segments(decodeEntities(match[4])).map(part => ({ ...part, escapeHtml: true })));
+        cursor = start + match[4].length;
+    }
+    result.push({ text: tag.slice(cursor), literal: true });
+    return result;
+}
 function segments(text, format = 'text') {
     if (format === 'html') {
         const result = [];
-        let cursor = 0;
+        let cursor = 0, protectedDepth = 0;
         for (const match of text.matchAll(htmlPattern)) {
-            result.push(...segments(decodeEntities(text.slice(cursor, match.index))).map(part => ({ ...part, escapeHtml: true })));
-            result.push({ text: match[0], literal: true });
+            const content = text.slice(cursor, match.index);
+            if (protectedDepth) result.push({ text: content, literal: true });
+            else result.push(...segments(decodeEntities(content)).map(part => ({ ...part, escapeHtml: true })));
+            const tag = match[0];
+            result.push(...(!protectedDepth && /^<img\b/i.test(tag) ? imageTagSegments(tag) : [{ text: tag, literal: true }]));
+            if (/^<(code|pre|script|style)\b/i.test(tag)) protectedDepth++;
+            if (/^<\/(code|pre|script|style)\b/i.test(tag)) protectedDepth = Math.max(0, protectedDepth - 1);
             cursor = match.index + match[0].length;
         }
         result.push(...segments(decodeEntities(text.slice(cursor))).map(part => ({ ...part, escapeHtml: true })));
@@ -48,14 +68,25 @@ function segments(text, format = 'text') {
     let cursor = 0;
     for (const match of text.matchAll(protectedPattern)) {
         if (match.index > cursor) result.push({ text: text.slice(cursor, match.index), literal: false });
-        result.push({ text: match[0], literal: true });
+        const image = /^!\[([^\]]*)\]\((.*)\)$/.exec(match[0]);
+        if (image) {
+            result.push({ text: '![', literal: true });
+            result.push(...segments(image[1]).map(part => ({ ...part, imageLabel: true })));
+            const title = /^(.*?)(\s+["'])(.*)(["'])$/.exec(image[2]);
+            result.push({ text: '](' + (title ? title[1] + title[2] : image[2]), literal: true });
+            if (title) {
+                result.push(...segments(title[3]).map(part => ({ ...part, imageLabel: true })));
+                result.push({ text: title[4], literal: true });
+            }
+            result.push({ text: ')', literal: true });
+        } else result.push({ text: match[0], literal: true });
         cursor = match.index + match[0].length;
     }
     if (cursor < text.length) result.push({ text: text.slice(cursor), literal: false });
     return result;
 }
 export function assertProtectedContent(original, translated) {
-    const tokens = text => [...text.matchAll(protectedPattern)].map(match => match[0]).filter(token => !/^\r?\n/.test(token)).sort();
+    const tokens = text => [...text.matchAll(protectedPattern)].map(match => match[0].replace(imagePattern, (_, label, destination) => '![](' + destination.replace(/\s+["'].*["']$/, '') + ')')).filter(token => !/^\r?\n/.test(token)).sort();
     if (JSON.stringify(tokens(original)) !== JSON.stringify(tokens(translated))) throw new Error('Translation changed a link, image, email address, or code block. Nothing was sent; try again.');
 }
 export function validateReplyPreview(preview) {
@@ -90,51 +121,60 @@ export function createTranslator({ fetchImpl = (...args) => fetch(...args), time
         }
         return response.json();
     }
-    async function translateChunk(text, source, target, key, signal, provider) {
+    async function translateBatch(texts, source, target, key, signal, provider) {
         if (provider === 'areviews') {
             const result = await request('https://translate-pa.googleapis.com/v1/translateHtml', {
                 method: 'POST', headers: { 'Content-Type': 'application/json+protobuf', 'X-Goog-Api-Key': key },
-                body: JSON.stringify([[text, source, target], 'te']),
+                body: JSON.stringify([[texts.map(escapeHtml), source, target], 'te']),
             }, signal);
-            if (typeof result?.[0]?.[0] !== 'string' || !result[0][0].trim()) throw new Error('Google returned an empty or invalid translation.');
-            return { text: decodeEntities(result[0][0]), sourceLanguage: normalizeLanguage(result[1]) || (source !== 'auto' ? source : null) };
+            if (!Array.isArray(result?.[0]) || result[0].length !== texts.length || result[0].some(text => typeof text !== 'string' || !text.trim())) throw new Error('Google returned an empty or incomplete translation.');
+            return result[0].map((text, index) => ({ text: decodeEntities(text), sourceLanguage: normalizeLanguage(result[1]?.[index]) || normalizeLanguage(result[1]) || (source !== 'auto' ? source : null) }));
         }
         const result = await request('https://translation.googleapis.com/language/translate/v2', {
             method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Goog-Api-Key': key },
-            body: JSON.stringify({ q: text, target, format: 'text', ...(source === 'auto' ? {} : { source }) }),
+            body: JSON.stringify({ q: texts, target, format: 'text', ...(source === 'auto' ? {} : { source }) }),
         }, signal);
-        const translated = result?.data?.translations?.[0];
-        if (typeof translated?.translatedText !== 'string' || !translated.translatedText.trim()) throw new Error('Google returned an empty or invalid translation.');
-        return { text: decodeEntities(translated.translatedText), sourceLanguage: normalizeLanguage(translated.detectedSourceLanguage) || (source !== 'auto' ? source : null) };
+        const translated = result?.data?.translations;
+        if (!Array.isArray(translated) || translated.length !== texts.length || translated.some(item => typeof item?.translatedText !== 'string' || !item.translatedText.trim())) throw new Error('Google returned an empty or incomplete translation.');
+        return translated.map(item => ({ text: decodeEntities(item.translatedText), sourceLanguage: normalizeLanguage(item.detectedSourceLanguage) || (source !== 'auto' ? source : null) }));
     }
     return async function translate(text, { source = 'auto', target = 'en', key, signal, format = 'text' } = {}) {
         if (!text?.trim()) throw new Error('Enter some text to translate.');
         if (!normalizeLanguage(target) || (source !== 'auto' && !normalizeLanguage(source))) throw new Error('Select a valid language.');
         if (!key) throw new Error('Add a Google browser translation key in Settings → Translation.');
         const parts = segments(text, format).flatMap(segment => segment.literal ? [segment] : chunks(segment.text).map(text => ({ ...segment, text })));
-        const results = [], detected = new Map();
-        const encode = (text, segment) => segment.escapeHtml ? text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;') : text;
+        const detected = new Map();
+        const encode = (text, segment) => segment.escapeHtml ? escapeHtml(text) : segment.imageLabel ? escapeHtml(text).replace(/\[/g, '&#91;').replace(/\]/g, '&#93;').replace(/\\/g, '&#92;') : text;
+        const batches = [];
+        let batch = [], length = 0;
+        for (const part of parts.filter(part => !part.literal && part.text.trim())) {
+            const size = [...escapeHtml(part.text)].length;
+            if (batch.length && (batch.length === 128 || length + size > 5000)) { batches.push(batch); batch = []; length = 0; }
+            batch.push(part); length += size;
+        }
+        if (batch.length) batches.push(batch);
         let provider = 'areviews';
-        for (const segment of parts) {
-            if (segment.literal || !segment.text.trim()) { results.push(encode(segment.text, segment)); continue; }
-            const part = segment.text;
+        for (const batch of batches) {
             signal?.throwIfAborted();
-            const leading = part.match(/^\s*/)[0], trailing = part.match(/\s*$/)[0];
             let result;
-            try { result = await translateChunk(part, source, target, key, signal, provider); }
+            try { result = await translateBatch(batch.map(part => part.text), source, target, key, signal, provider); }
             catch (error) {
                 signal?.throwIfAborted();
                 if (provider === 'cloud' || error.status === 429 || error.name === 'TimeoutError') throw error;
                 provider = 'cloud';
-                result = await translateChunk(part, source, target, key, signal, provider);
+                result = await translateBatch(batch.map(part => part.text), source, target, key, signal, provider);
             }
-            results.push(encode(leading + result.text.trim() + trailing, segment));
-            if (result.sourceLanguage) detected.set(result.sourceLanguage, (detected.get(result.sourceLanguage) || 0) + part.length);
+            batch.forEach((part, index) => {
+                const translated = result[index];
+                part.translated = part.text.match(/^\s*/)[0] + translated.text.trim() + part.text.match(/\s*$/)[0];
+                if (translated.sourceLanguage) detected.set(translated.sourceLanguage, (detected.get(translated.sourceLanguage) || 0) + part.text.length);
+            });
         }
         signal?.throwIfAborted();
-        const output = results.join('');
+        const output = parts.map(part => encode(part.translated ?? part.text, part)).join('');
         if (format === 'html') {
-            if (JSON.stringify([...text.matchAll(htmlPattern)].map(match => match[0])) !== JSON.stringify([...output.matchAll(htmlPattern)].map(match => match[0]))) throw new Error('Translation changed the email formatting. Try again.');
+            const structure = html => [...html.matchAll(htmlPattern)].map(match => /^<img\b/i.test(match[0]) ? match[0].replace(imageAttributes, '$1$2$3$3') : match[0]);
+            if (JSON.stringify(structure(text)) !== JSON.stringify(structure(output))) throw new Error('Translation changed the email formatting. Try again.');
         }
         assertProtectedContent(text, output);
         return { text: output, sourceLanguage: [...detected].sort((a, b) => b[1] - a[1])[0]?.[0] || null, targetLanguage: target };
@@ -147,10 +187,11 @@ export function previewMatches(preview, body, subject, context) {
 export async function prepareReply(body, subject, context, options, translate = translateText) {
     if (!context?.target) throw new Error('Detect or select the customer language before translating your reply.');
     const reply = await translate(body, { ...options, source: 'auto', target: context.target });
-    const title = await translate(subject, { ...options, source: 'auto', target: context.target });
-    if (!reply.text.trim() || !title.text.trim() || [...title.text].length > 500 || /[\r\n]/.test(title.text)) throw new Error('Google returned an invalid reply or subject. Nothing was sent.');
-    return { originalBody: body, originalSubject: subject, body: reply.text, subject: title.text,
+    if (!reply.text.trim() || !subject.trim() || [...subject].length > 500 || /[\r\n]/.test(subject)) throw new Error('Google returned an invalid reply or the subject is invalid. Nothing was sent.');
+    const preview = { originalBody: body, originalSubject: subject, body: reply.text, subject,
         source: reply.sourceLanguage || options.adminLanguage || 'en', context: JSON.parse(JSON.stringify(context)) };
+    validateReplyPreview(preview);
+    return preview;
 }
 export function replyPayload(preview) {
     return { original_body: preview.originalBody, subject: preview.subject, source_language: preview.source, context: preview.context };

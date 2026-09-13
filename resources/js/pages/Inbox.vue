@@ -7,11 +7,11 @@ import TicketRowMenu from '../components/TicketRowMenu.vue';
 import { useBulkTicketDeletion } from '../useBulkTicketDeletion';
 import { useTicketSearch } from '../useTicketSearch';
 const route = useNavigation(), newTicket = inject('newTicket');
-const tickets = ref([]), total = ref(0), loading = ref(true), loadError = ref(''), sort = ref('newest');
-const selected = ref([]), page = ref(1), lastPage = ref(1), busy = ref(false);
+const tickets = ref([]), total = ref(0), loading = ref(true), loadError = ref(''), refreshError = ref(''), sort = ref('newest');
+const selected = ref([]), page = ref(1), lastPage = ref(1), busy = ref(false), fetching = ref(false);
 const { deleting, error: deleteError, open: confirmBulkDelete, confirm: deleteSelected } = useBulkTicketDeletion(selected, busy, async result => {
     notify(`${result.deleted} ticket${result.deleted === 1 ? '' : 's'} permanently deleted`);
-    await load();
+    selected.value = []; await load(false, true);
 });
 const changes = reactive({ status: '', priority: '', assignee_id: '', team_id: '', folder: '', tag: '' });
 const view = computed(() => route.query.view || 'all');
@@ -20,27 +20,42 @@ const title = computed(() => ({ all: 'All tickets', mine: 'Assigned to me', unas
 const allSelected = computed(() => tickets.value.length > 0 && selected.value.length === tickets.value.length);
 const someSelected = computed(() => selected.value.length > 0 && !allSelected.value);
 let timer, polling, requestId = 0;
-onMounted(() => { polling = setInterval(() => { if (view.value !== 'archive' && !document.hidden && !selected.value.length && !busy.value && !loading.value) load(false, true); }, 30000); });
+onMounted(() => { polling = setInterval(() => { if (view.value !== 'archive' && !document.hidden && !selected.value.length && !busy.value && !fetching.value) load(false, true); }, 30000); });
 onBeforeUnmount(() => { clearTimeout(timer); clearInterval(polling); requestId++; });
 async function load(append = false, quiet = false, includeCounts = true) {
     const id = ++requestId;
-    if (!append) { page.value = 1; selected.value = []; if (!quiet) loading.value = true; }
-    loadError.value = '';
-    const params = new URLSearchParams({ view: view.value, search: search.value, sort: sort.value, page: String(page.value), include_counts: includeCounts && !append ? '1' : '0' });
+    const requestedPage = append ? page.value + 1 : quiet ? page.value : 1;
+    if (!append && !quiet) { selected.value = []; loading.value = true; }
+    fetching.value = true;
+    loadError.value = ''; refreshError.value = '';
+    const params = new URLSearchParams({ view: view.value, search: search.value, sort: sort.value, page: String(append ? requestedPage : 1), include_counts: includeCounts && !append ? '1' : '0' });
     if (state.scope !== 'all') { const [key, value] = state.scope.split(':'); params.set(key + '_id', value); }
     try {
         const data = await api('tickets?' + params);
         if (id !== requestId) return;
-        tickets.value = append ? [...tickets.value, ...data.tickets] : data.tickets;
+        const nextPage = Math.min(requestedPage, data.last_page);
+        const refreshedTickets = [...data.tickets];
+        if (!append && quiet) {
+            for (let currentPage = 2; currentPage <= nextPage; currentPage++) {
+                params.set('page', String(currentPage)); params.set('include_counts', '0');
+                const next = await api('tickets?' + params);
+                if (id !== requestId) return;
+                refreshedTickets.push(...next.tickets);
+            }
+        }
+        tickets.value = [...new Map((append ? [...tickets.value, ...refreshedTickets] : refreshedTickets).map(ticket => [ticket.id, ticket])).values()];
+        page.value = nextPage;
+        selected.value = selected.value.filter(ticketId => tickets.value.some(ticket => ticket.id === ticketId));
         total.value = data.total; lastPage.value = data.last_page;
         if (data.counts) { state.counts = data.counts; state.viewCounts = data.views; }
-    } catch (e) { if (id === requestId) loadError.value = e.message; }
-    finally { if (id === requestId) loading.value = false; }
+    } catch (e) { if (id === requestId) { if (loading.value) loadError.value = e.message; else refreshError.value = e.message; } }
+    finally { if (id === requestId) { loading.value = false; fetching.value = false; } }
 }
 watch([view, () => state.scope, sort, () => state.refresh, search], (values, previous) => {
     clearTimeout(timer);
-    if (values.slice(0, 4).some((value, index) => value !== previous?.[index])) load();
-    else timer = setTimeout(() => load(false, false, false), 250);
+    if (values.slice(0, 3).some((value, index) => value !== previous?.[index])) load();
+    else if (values[4] !== previous?.[4]) { requestId++; timer = setTimeout(() => load(false, false, false), 250); }
+    else load(false, true);
 }, { immediate: true });
 function toggleAll() { selected.value = allSelected.value ? [] : tickets.value.map(t => t.id); }
 async function bulk() {
@@ -48,7 +63,7 @@ async function bulk() {
     if (payload.assignee_id === 'unassigned') payload.assignee_id = null;
     if (!Object.keys(payload).length && !changes.tag.trim()) { notify('Choose a change to apply.', true); return; }
     busy.value = true;
-    try { await api('tickets/bulk', { method: 'POST', body: { ids: selected.value, changes: payload, tag: changes.tag.trim() || null } }); notify('Selected tickets updated'); Object.keys(changes).forEach(k => changes[k] = ''); await load(); }
+    try { await api('tickets/bulk', { method: 'POST', body: { ids: selected.value, changes: payload, tag: changes.tag.trim() || null } }); notify('Selected tickets updated'); Object.keys(changes).forEach(k => changes[k] = ''); selected.value = []; await load(false, true); }
     catch (e) { notify(e.message, true); } finally { busy.value = false; }
 }
 async function action(ticket, data) {
@@ -56,7 +71,7 @@ async function action(ticket, data) {
     busy.value = true; requestId++;
     try { await api('tickets/' + ticket.id, { method: 'PATCH', body: data }); notify('Ticket updated'); await load(false, true); }
     catch (e) { notify(e.message, true); }
-    finally { busy.value = false; }
+    finally { busy.value = false; fetching.value = false; }
 }
 function delivery(ticket) {
     const message = ticket.latest_message;
@@ -91,6 +106,7 @@ function delivery(ticket) {
         <button v-if="state.user.role === 'admin'" type="button" class="danger-button" :disabled="busy" @click="confirmBulkDelete"><Icon name="trash" :size="15" />Delete permanently</button>
         <button type="button" @click="selected = []" :disabled="busy">Cancel</button>
     </form>
+    <p v-if="refreshError" class="error-message" role="alert">Couldn’t refresh your tickets. {{ refreshError }} <button type="button" class="text-button" @click="load(false, true)">Try again</button></p>
     <div class="ticket-table" role="table" aria-label="Tickets">
         <div class="table-head" role="row"><span role="columnheader" class="select-cell"><input type="checkbox" :checked="allSelected" :indeterminate.prop="someSelected" @change="toggleAll" :disabled="!tickets.length" aria-label="Select all tickets" /><span class="mobile-select-text">Select all</span></span><span role="columnheader">Customer</span><span role="columnheader">Conversation</span><span role="columnheader">Status</span><span role="columnheader" class="assignee-cell">Assignee</span><span role="columnheader" class="delivery-cell">Email activity</span><span role="columnheader">Received</span><span role="columnheader"><button class="icon-button" @click="sort = sort === 'newest' ? 'oldest' : 'newest'" :aria-label="sort === 'newest' ? 'Sort oldest first' : 'Sort newest first'" :title="sort === 'newest' ? 'Newest first' : 'Oldest first'"><Icon name="sort" :size="16" /></button></span></div>
         <div v-if="loadError" class="empty-state"><Icon name="alert" :size="30" /><h2>Couldn’t load your tickets</h2><p>{{ loadError }}</p><button class="secondary-button" @click="load()">Try again</button></div>
@@ -109,7 +125,7 @@ function delivery(ticket) {
             <div v-if="!tickets.length" class="empty-state"><div class="empty-icon"><Icon :name="search ? 'search' : 'inbox'" :size="30" /></div><h2>{{ search ? 'No matching conversations' : 'A little breathing room.' }}</h2><p>{{ search ? 'Try a different subject, requester, ticket ID, or tag.' : 'There are no tickets in this view. New conversations will appear here.' }}</p><button v-if="search" class="secondary-button" @click="search = ''">Clear search</button><button v-else class="secondary-button" @click="newTicket"><Icon name="plus" />Create a ticket</button></div>
         </template>
     </div>
-    <button v-if="page < lastPage && !loading" class="load-more secondary-button" @click="page++; load(true)">Load more conversations</button>
+    <button v-if="page < lastPage && !loading" class="load-more secondary-button" :disabled="fetching" @click="load(true)">Load more conversations</button>
 </main>
 <Modal v-if="deleting" title="Permanently delete selected tickets?" @close="!busy && (deleting = null)">
     <p class="delete-description">Permanently delete <strong>{{ deleting.length }} selected {{ deleting.length === 1 ? 'ticket' : 'tickets' }}</strong> and any conversations merged into them?</p>

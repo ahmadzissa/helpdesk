@@ -28,7 +28,7 @@ class TicketResource extends JsonResource
             $subject = DB::table('ticket_translations')->where('ticket_id', $this->id)->where('target_language', $target)->where('source_hash', $data['subject_hash'])->first();
             $data['subject_translation'] = $subject;
             $sample = $policy->latestInbound($this->resource);
-            $data['language_sample'] = $sample ? ['id' => $sample->id, 'body' => $sample->body, 'source_hash' => hash('sha256', $sample->body)] : null;
+            $data['language_sample'] = $sample ? ['id' => $sample->id, 'body' => app(EmailContent::class)->text($sample), 'source_hash' => hash('sha256', $sample->body)] : null;
             $translations = DB::table('message_translations')->whereIn('message_id', array_column($data['messages'], 'id'))->where('target_language', $target)->get()->keyBy('message_id');
             $models = $this->resource->messages->keyBy('id');
             $content = app(EmailContent::class);
@@ -36,10 +36,13 @@ class TicketResource extends JsonResource
                 $model = $models->get($message['id']);
                 $message['body_html'] = $content->render($model);
                 $message['translation_format'] = $model->kind === 'inbound' && $model->email_html ? 'html' : 'text';
-                $message['translation_text'] = $message['translation_format'] === 'html' ? $message['body_html'] : $message['body'];
+                $message['translation_text'] = $message['translation_format'] === 'html' ? $message['body_html'] : $content->text($model);
                 $message['source_hash'] = hash('sha256', $message['body']);
                 $message['original_body_html'] = isset($message['original_body']) ? Message::renderBody($message['original_body'], $message['kind']) : null;
                 $translation = $translations->get($message['id']);
+                if ($translation) {
+                    $translation->body = $content->withoutTrackingLabels($translation->body, $model);
+                }
                 $message['translation'] = $translation && $translation->source_hash === $message['source_hash'] ? [...(array) $translation, 'body_html' => $content->render($model, $translation->body, $translation->body_format)] : null;
                 if ($message['attempt_id'] ?? null) {
                     $attempt = DB::table('mail_delivery_attempts')->where('id', $message['attempt_id'])->first();

@@ -256,7 +256,7 @@ class TicketController extends Controller
                 $ticket = Ticket::whereKey($ticket->id)->lockForUpdate()->firstOrFail();
                 $ticket->assertWritable();
                 $private = $request->boolean('private');
-                $translation = $private ? [] : app(TranslationPolicy::class)->outgoing($ticket, $data['body'], $data['translation'] ?? null);
+                $translation = $private ? [] : app(TranslationPolicy::class)->outgoing($ticket, $data['body'], $data['translation'] ?? null, (bool) ($data['send_original'] ?? false));
                 $message = $ticket->messages()->create(['body' => $data['body'], 'kind' => $private ? 'note' : 'outbound', 'user_id' => $request->user()->id,
                     'author_name' => $request->user()->name, 'author_email' => $ticket->mailbox?->email, ...($private ? ['delivery' => null] : app(MailSafety::class)->prepare($ticket->mailbox)), 'attachments' => $files, ...$translation]);
                 app(InlineImages::class)->bind($message, $ticket, $request->user()->id);

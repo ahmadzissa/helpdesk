@@ -32,13 +32,12 @@ class OutgoingMail
 
     public function html(Message $message, Email $email): string
     {
-        $html = Message::renderBody($message->body, 'outbound');
-        foreach (DB::table('inline_images')->where('message_id', $message->id)->get() as $image) {
-            $cid = $image->id.'@relay.inline';
-            $part = DataPart::fromPath(Storage::disk('local')->path($image->path), $image->name, $image->mime)->asInline();
-            $part->setContentId($cid);
-            $email->addPart($part);
-            $html = str_replace('/api/v1/inline-images/'.$image->id, 'cid:'.$cid, $html);
+        $html = '<div dir="auto">'.$this->messageHtml($message, $email).'</div>';
+        $previous = $this->previousMessage($message);
+        if ($previous) {
+            $html .= '<div class="gmail_quote" style="margin-top:24px"><p dir="auto">'.e($this->attribution($previous)).'</p>'
+                .'<blockquote type="cite" dir="auto" style="margin:0;padding:0 16px;border-left:2px solid #ddd">'
+                .$this->messageHtml($previous, $email).'</blockquote></div>';
         }
         $attempt = DB::table('mail_delivery_attempts')->where('id', $message->attempt_id)->first();
         if ($attempt && (WorkspaceSetting::find('mail_policy')?->value['track_opens'] ?? true)) {
@@ -51,5 +50,62 @@ class OutgoingMail
         }
 
         return $html;
+    }
+
+    public function previousMessage(Message $message): ?Message
+    {
+        return $message->ticket->messages()->where('id', '<', $message->id)
+            ->where(fn ($query) => $query->where('kind', 'inbound')
+                ->orWhere(fn ($query) => $query->where('kind', 'outbound')->where('delivery', 'sent')))
+            ->reorder()->latest('id')->first();
+    }
+
+    public function text(Message $message): string
+    {
+        $previous = $this->previousMessage($message);
+        if (! $previous) {
+            return $message->body;
+        }
+        $body = $previous->kind === 'inbound' ? app(EmailReplyContent::class)->text($previous->body) : $previous->body;
+        if ($previous->kind === 'inbound' && $previous->email_html) {
+            $html = app(EmailContent::class)->render($previous);
+            $body = trim(html_entity_decode(strip_tags(preg_replace('/<br\s*\/?\s*>|<\/(?:p|div|li|tr|h[1-6])>/i', "\n", $html)), ENT_QUOTES | ENT_HTML5, 'UTF-8'));
+        }
+
+        return $message->body."\n\n".$this->attribution($previous)."\n".preg_replace('/^/m', '> ', $body);
+    }
+
+    private function attribution(Message $message): string
+    {
+        $author = $message->author_name ?: $message->author_email;
+        if ($message->kind === 'outbound') {
+            $author = $message->ticket->mailbox?->name ?: $message->ticket->mailbox?->email;
+        }
+
+        return 'On '.$message->created_at->format('D, M j, Y \a\t H:i T').' '.($author ?: 'Customer').' wrote:';
+    }
+
+    private function messageHtml(Message $message, Email $email): string
+    {
+        $html = app(EmailContent::class)->render($message);
+        foreach (DB::table('inline_images')->where('message_id', $message->id)->get() as $image) {
+            $cid = $image->id.'@relay.inline';
+            $part = DataPart::fromPath(Storage::disk('local')->path($image->path), $image->name, $image->mime)->asInline();
+            $part->setContentId($cid);
+            $email->addPart($part);
+            $html = str_replace('/api/v1/inline-images/'.$image->id, 'cid:'.$cid, $html);
+        }
+        foreach ($message->attachments ?? [] as $index => $file) {
+            $path = '/api/v1/attachments/'.$message->id.'/'.$index.'/inline';
+            if (in_array($file['mime'] ?? '', EmailContent::IMAGE_TYPES, true) && str_contains($html, 'src="'.$path.'"')) {
+                $cid = $message->id.'-'.$index.'@relay.quoted';
+                $part = DataPart::fromPath(Storage::disk('local')->path($file['path']), $file['name'], $file['mime'])->asInline();
+                $part->setContentId($cid);
+                $email->addPart($part);
+                $html = str_replace('src="'.$path.'"', 'src="cid:'.$cid.'"', $html);
+            }
+        }
+
+        return str_replace(' data-email-src="', ' src="', $html);
     }
 }

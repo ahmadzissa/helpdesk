@@ -2,7 +2,9 @@
 
 namespace App\Models;
 
+use App\Services\EmailHeaders;
 use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Database\Eloquent\Casts\Attribute;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -16,6 +18,14 @@ class Ticket extends Model
     protected $fillable = ['subject', 'requester_name', 'requester_email', 'company', 'status', 'priority', 'folder', 'source', 'mailbox_id', 'team_id', 'assignee_id', 'tags', 'cc', 'custom_fields', 'unread', 'last_activity_at', 'resolved_at'];
 
     protected $hidden = ['normalized_tags'];
+
+    protected function subject(): Attribute
+    {
+        return Attribute::make(
+            get: fn (string $value): string => app(EmailHeaders::class)->decode($value),
+            set: fn (string $value): string => app(EmailHeaders::class)->decode($value),
+        );
+    }
 
     protected static function booted(): void
     {

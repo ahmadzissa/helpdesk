@@ -5,12 +5,13 @@ import { translateText, prepareReply, previewMatches } from './translation.js';
 export function useTicketTranslation(ticket, body, privateNote) {
     const settings = computed(() => state.workspace.translation || { incoming: true, outgoing: false, target: 'en' });
     const original = reactive({}), errors = reactive({}), pending = reactive({});
-    const subjectOriginal = ref(false), translationError = ref(''), translating = ref(false), preview = ref(null);
+    const translationError = ref(''), translating = ref(false), preview = ref(null);
     const detecting = ref(false), languageError = ref('');
     let configPromise, detectionPromise, disposed = false, incomingController = new AbortController(), replyController, replySnapshot = false, incomingRun = 0;
     const messageJobs = new Map();
     const previewReady = computed(() => !privateNote.value && previewMatches(preview.value, body.value, ticket.value?.subject, ticket.value?.translation_context));
     const autoReply = computed(() => settings.value.outgoing && !privateNote.value);
+    const automaticSend = computed(() => autoReply.value && settings.value.auto_send);
     async function config(fresh = false) {
         if (fresh || !configPromise) configPromise = api('translation/config').catch(e => { configPromise = null; throw e; });
         const result = await configPromise;
@@ -66,16 +67,6 @@ export function useTicketTranslation(ticket, body, privateNote) {
             if (!language) await detectLanguage();
         } catch (e) { languageError.value = e.message; }
     }
-    async function translateSubject() {
-        if (ticket.value.subject_translation?.target_language === settings.value.target) return;
-        const current = ticket.value, target = settings.value.target;
-        try {
-            const { key } = await config();
-            const result = await translateText(current.subject, { key, target, signal: incomingController.signal });
-            const saved = await api('tickets/' + current.id + '/subject-translation', { method: 'PUT', body: { subject: result.text, target_language: target, source_hash: current.subject_hash } });
-            if (!disposed && ticket.value.id === current.id && ticket.value.subject_hash === current.subject_hash && target === settings.value.target) ticket.value.subject_translation = saved.translation;
-        } catch (e) { if (e.name !== 'AbortError' && !disposed) errors.subject = e.message; throw e; }
-    }
     async function translateAll(force = false) {
         const run = ++incomingRun;
         delete errors.all;
@@ -88,8 +79,11 @@ export function useTicketTranslation(ticket, body, privateNote) {
                 if (disposed || run !== incomingRun || (!force && !settings.value.incoming)) return;
                 await translateMessage(message);
             }
-            await translateSubject();
         } catch (e) { if (!disposed && e.name !== 'AbortError') errors.all = e.message; }
+    }
+    async function prepareToSend(required = autoReply.value) {
+        if (privateNote.value || !required || previewReady.value) return true;
+        return await prepare() && Boolean(automaticSend.value);
     }
     async function prepare() {
         if (translating.value || !body.value.trim()) return false;
@@ -130,6 +124,6 @@ export function useTicketTranslation(ticket, body, privateNote) {
         if (ticket.value) translateAll();
     });
     onBeforeUnmount(() => { disposed = true; incomingRun++; incomingController.abort(); replyController?.abort(); });
-    return { settings, original, errors, pending, subjectOriginal, translateMessage, translateAll, translateSubject,
-        preview, previewReady, translating, translationError, prepare, autoReply, detecting, languageError, detectLanguage, setLanguage };
+    return { settings, original, errors, pending, translateMessage, translateAll,
+        preview, previewReady, translating, translationError, prepare, prepareToSend, autoReply, automaticSend, detecting, languageError, detectLanguage, setLanguage };
 }

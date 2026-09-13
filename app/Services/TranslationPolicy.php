@@ -16,7 +16,7 @@ class TranslationPolicy
 
     public function settings(): array
     {
-        return array_replace(['incoming' => true, 'target' => 'en', 'outgoing' => false, 'revision' => 0], WorkspaceSetting::find('translation')?->value ?? []);
+        return array_replace(['incoming' => true, 'target' => 'en', 'outgoing' => false, 'auto_send' => false, 'revision' => 0], WorkspaceSetting::find('translation')?->value ?? []);
     }
 
     public function browserKey(): string
@@ -64,7 +64,7 @@ class TranslationPolicy
 
     public function rules(): array
     {
-        return ['translation' => 'nullable|array:original_body,subject,source_language,context',
+        return ['send_original' => 'sometimes|boolean', 'translation' => 'nullable|array:original_body,subject,source_language,context',
             'translation.original_body' => 'required_with:translation|string|max:50000',
             'translation.subject' => ['required_with:translation', 'string', 'max:500', 'not_regex:/[\r\n]/'],
             'translation.source_language' => ['required_with:translation', 'string', self::LANGUAGE_RULE],
@@ -72,8 +72,15 @@ class TranslationPolicy
     }
 
     /** The browser submits the reviewed result; the server only checks its context and stores it. */
-    public function outgoing(Ticket $ticket, string $body, ?array $translation): array
+    public function outgoing(Ticket $ticket, string $body, ?array $translation, bool $sendOriginal = false): array
     {
+        if ($sendOriginal) {
+            abort_if($translation !== null, 422, 'Choose either the translated reply or the original reply.');
+
+            return ['original_body' => $body, 'translated_subject' => null,
+                'translation_context' => [...$this->context($ticket), 'send_original' => true,
+                    'body_hash' => hash('sha256', $body), 'original_hash' => hash('sha256', $body)]];
+        }
         $required = $this->settings()['outgoing'];
         if (! $translation) {
             abort_if($required, 422, 'Translate and review this reply in the browser before sending.');
@@ -108,10 +115,13 @@ class TranslationPolicy
             return ! $this->settings()['outgoing'];
         }
         $expected = $this->context($message->ticket);
-        if (! $this->detectionCurrent($message->ticket, $expected)) {
+        if (empty($context['send_original']) && ! $this->detectionCurrent($message->ticket, $expected)) {
             return false;
         }
         foreach ($expected as $key => $value) {
+            if (! empty($context['send_original']) && in_array($key, ['target', 'inbound_id'], true)) {
+                continue;
+            }
             if (($context[$key] ?? null) !== $value) {
                 return false;
             }

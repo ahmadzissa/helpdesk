@@ -19,6 +19,9 @@ class IncomingMail
      */
     public function import(Mailbox $mailbox, array $data): ?Ticket
     {
+        $headers = app(EmailHeaders::class);
+        $data['subject'] = $headers->decode($data['subject']);
+        $data['from_name'] = $headers->decode($data['from_name'] ?? '');
         $email = mb_strtolower(trim($data['from_email']));
         if (! filter_var($email, FILTER_VALIDATE_EMAIL) || $email === mb_strtolower($mailbox->email)) {
             return null;
@@ -68,7 +71,7 @@ class IncomingMail
                     }
                     $path = 'ticket-attachments/'.Str::uuid();
                     Storage::disk('local')->put($path, $file['content']);
-                    $files[] = ['path' => $path, 'name' => mb_substr(basename(str_replace('\\', '/', $file['name'])), 0, 200), 'size' => strlen($file['content']),
+                    $files[] = ['path' => $path, 'name' => mb_substr(basename(str_replace('\\', '/', app(EmailHeaders::class)->decode($file['name']))), 0, 200), 'size' => strlen($file['content']),
                         'content_id' => mb_substr(trim($file['content_id'] ?? '', '<> '), 0, 255), 'mime' => (new \finfo(FILEINFO_MIME_TYPE))->buffer($file['content'])];
                 }
                 $message = $ticket->messages()->make(['mailbox_id' => $mailbox->id, 'external_id' => $externalId, 'kind' => 'inbound',

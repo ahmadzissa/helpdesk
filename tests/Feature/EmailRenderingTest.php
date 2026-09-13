@@ -10,6 +10,7 @@ use App\Services\EmailContent;
 use App\Services\ImapInbox;
 use App\Services\IncomingMail;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
 use Mockery;
 use Tests\TestCase;
@@ -111,5 +112,50 @@ class EmailRenderingTest extends TestCase
         $this->assertStringContainsString('data-email-src="https://example.com/picture.png"', $html);
         $this->assertStringNotContainsString('evil()', $html);
         $this->getJson('/api/v1/tickets/'.$message->ticket_id)->assertOk()->assertJsonPath('ticket.messages.0.translation.body_html', $html);
+    }
+
+    public function test_tracking_pixel_labels_are_removed_from_translation_input_and_existing_cached_translations(): void
+    {
+        $label = '6adf0fac-7622-4b2b-80f3-58180fa8e4b0';
+        $message = $this->htmlMessage('<p>مرحباً، هل يمكنك مساعدتي؟</p><img src="https://tracking.example.com/OpenTrackingPixel/" width="1" height="1" style="display:none" alt="'.$label.'">');
+        $message->update(['body' => "مرحباً، هل يمكنك مساعدتي؟\r\n[{$label}]", 'author_email' => $message->ticket->requester_email]);
+        $rawBody = $message->body;
+        DB::table('message_translations')->insert(['message_id' => $message->id, 'target_language' => 'en', 'source_language' => 'ar',
+            'body' => "Hello, can you help me?\r\n[{$label}]", 'body_format' => 'text', 'source_hash' => hash('sha256', $rawBody)]);
+        $this->actingAs(User::factory()->create());
+        $response = $this->getJson('/api/v1/tickets/'.$message->ticket_id)->assertOk();
+        $this->assertSame('مرحباً، هل يمكنك مساعدتي؟', $response->json('ticket.language_sample.body'));
+        foreach (['body_html', 'translation_text', 'translation.body', 'translation.body_html'] as $field) {
+            $this->assertStringNotContainsString($label, $response->json('ticket.messages.0.'.$field));
+        }
+        $this->assertStringContainsString('Hello, can you help me?', $response->json('ticket.messages.0.translation.body_html'));
+        $this->assertSame($rawBody, $message->fresh()->body);
+    }
+
+    public function test_saving_text_or_html_translations_does_not_keep_tracking_labels(): void
+    {
+        $label = '6adf0fac-7622-4b2b-80f3-58180fa8e4b0';
+        $message = $this->htmlMessage('<p>Hola</p><img src="https://example.com/pixel" alt="'.$label.'" style="display:none">');
+        $this->actingAs(User::factory()->create());
+        foreach (['text' => "Hello\n[{$label}]", 'html' => '<p>Hello</p><p>['.$label.']</p>'] as $format => $body) {
+            $response = $this->putJson('/api/v1/messages/'.$message->id.'/translation', ['body' => $body, 'body_format' => $format,
+                'source_language' => 'es', 'target_language' => 'en', 'source_hash' => hash('sha256', $message->body)])->assertOk();
+            $this->assertStringNotContainsString($label, $response->json('translation.body'));
+            $this->assertStringNotContainsString($label, $response->json('translation.body_html'));
+            $this->assertStringNotContainsString($label, DB::table('message_translations')->where('message_id', $message->id)->value('body'));
+        }
+    }
+
+    public function test_real_reference_ids_and_visible_image_labels_are_preserved(): void
+    {
+        $reference = '6adf0fac-7622-4b2b-80f3-58180fa8e4b0';
+        $message = $this->htmlMessage('<p>Order ['.$reference.']</p><img src="https://example.com/screenshot.png" width="800" alt="'.$reference.'">');
+        $message->body = 'Order ['.$reference.']';
+        $content = app(EmailContent::class);
+        $this->assertSame($message->body, $content->text($message));
+        $this->assertStringContainsString('Order ['.$reference.']', $content->render($message, $message->body));
+        $this->assertStringContainsString('data-email-src="https://example.com/screenshot.png"', $content->render($message));
+        $message->forceFill(['email_html' => null]);
+        $this->assertSame($message->body, $content->text($message));
     }
 }
