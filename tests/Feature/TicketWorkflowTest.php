@@ -19,6 +19,21 @@ class TicketWorkflowTest extends TestCase
 {
     use RefreshDatabase;
 
+    public function test_requester_history_separates_recent_tickets_and_searches_only_their_archive(): void
+    {
+        $this->actingAs(User::factory()->create());
+        $ticket = Ticket::factory()->create(['requester_email' => 'customer@example.com']);
+        $recent = Ticket::factory()->create(['requester_email' => 'CUSTOMER@example.com', 'folder' => 'inbox', 'status' => 'Closed']);
+        $archived = Ticket::factory()->create(['requester_email' => $ticket->requester_email, 'folder' => 'archive', 'subject' => 'Old widget question']);
+        Ticket::factory()->create(['requester_email' => $ticket->requester_email, 'folder' => 'archive', 'subject' => 'Billing question']);
+        Ticket::factory()->create(['requester_email' => 'another@example.com', 'folder' => 'archive', 'subject' => 'Widget question']);
+        Ticket::factory()->create(['requester_email' => $ticket->requester_email, 'folder' => 'trash', 'subject' => 'Widget deleted']);
+        Ticket::factory()->create(['requester_email' => $ticket->requester_email, 'folder' => 'inbox', 'merged_into_id' => $ticket->id]);
+        $this->getJson('/api/v1/tickets/'.$ticket->id.'/history')->assertOk()->assertJsonCount(1, 'recent')->assertJsonPath('recent.0.id', $recent->id)->assertJsonPath('recent.0.status', 'Closed');
+        $this->getJson('/api/v1/tickets/'.$ticket->id.'/history?folder=archive&q=WIDGET')->assertOk()->assertJsonCount(1, 'history.data')->assertJsonPath('history.data.0.id', $archived->id)->assertJsonCount(1, 'recent');
+        $this->getJson('/api/v1/tickets/'.$ticket->id.'/history?folder=trash')->assertUnprocessable();
+    }
+
     public function test_replies_assign_to_the_replying_agent_by_default(): void
     {
         Queue::fake();

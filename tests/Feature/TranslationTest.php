@@ -35,6 +35,54 @@ class TranslationTest extends TestCase
         WorkspaceSetting::updateOrCreate(['key' => 'translation'], ['value' => ['incoming' => true, 'target' => 'en', 'outgoing' => true, 'revision' => 1]]);
     }
 
+    public function test_ticket_translation_switch_persists_and_allows_original_replies_only_for_that_ticket(): void
+    {
+        $this->enableTranslation();
+        $this->actingAs(User::factory()->create(['role' => 'agent']));
+        $ticket = $this->ticket();
+        $other = Ticket::factory()->create();
+        $this->getJson('/api/v1/tickets/'.$ticket->id)->assertJsonPath('ticket.translation_enabled', true);
+        $this->patchJson('/api/v1/tickets/'.$ticket->id, ['translation_enabled' => false])
+            ->assertOk()->assertJsonPath('data.translation_enabled', false);
+        $this->getJson('/api/v1/tickets/'.$ticket->id)->assertJsonPath('ticket.translation_enabled', false);
+        $this->assertTrue($other->fresh()->translation_enabled);
+        $this->assertTrue(app(TranslationPolicy::class)->settings()['outgoing']);
+
+        $body = "  Hello, we can help.\n\n";
+        $this->postJson('/api/v1/tickets/'.$ticket->id.'/messages', ['body' => $body])->assertSuccessful();
+        $message = $ticket->messages()->latest('id')->first();
+        $this->assertSame($body, $message->body);
+        $this->assertNull($message->translated_subject);
+        $this->assertTrue(app(TranslationPolicy::class)->ready($message));
+        $this->postJson('/api/v1/tickets/'.$other->id.'/messages', ['body' => $body])->assertUnprocessable();
+
+        $this->patchJson('/api/v1/tickets/'.$ticket->id, ['translation_enabled' => true])->assertOk();
+        $this->assertFalse(app(TranslationPolicy::class)->ready($message->fresh()));
+        $this->postJson('/api/v1/tickets/'.$ticket->id.'/messages', ['body' => $body])->assertUnprocessable();
+        Http::assertNothingSent();
+    }
+
+    public function test_disabling_translation_sends_original_from_stale_preview_and_allows_reviewing_held_original(): void
+    {
+        $this->enableTranslation();
+        $this->actingAs(User::factory()->create());
+        $ticket = $this->ticket();
+        $payload = $this->payload($ticket);
+        $ticket->update(['translation_enabled' => false]);
+        $this->postJson('/api/v1/tickets/'.$ticket->id.'/messages', $payload)->assertSuccessful();
+        $message = $ticket->messages()->latest('id')->first();
+        $this->assertSame($payload['translation']['original_body'], $message->body);
+        $this->assertNull($message->translated_subject);
+        $this->assertTrue(app(TranslationPolicy::class)->ready($message));
+
+        $held = Message::factory()->create(['ticket_id' => $ticket->id, 'kind' => 'outbound', 'delivery' => 'translation_pending',
+            'body' => 'Hola', 'original_body' => 'Hello', 'attempt_id' => null]);
+        $this->postJson('/api/v1/messages/'.$held->id.'/prepare-translation', ['body' => 'Hello', 'send_original' => true])->assertOk();
+        $this->assertSame('Hello', $held->fresh()->body);
+        $this->assertTrue(app(TranslationPolicy::class)->ready($held->fresh()));
+        Http::assertNothingSent();
+    }
+
     private function ticket(): Ticket
     {
         $box = Mailbox::factory()->create(['sending_enabled' => true, 'smtp_host' => 'smtp.example.com']);
@@ -177,18 +225,38 @@ class TranslationTest extends TestCase
             DB::table('customer_languages')->where('email', $ticket->requester_email)->update(['language' => $language, 'manual' => true]);
             $payload = ['body' => $body, 'translation' => ['original_body' => $body, 'subject' => $ticket->subject,
                 'source_language' => $language, 'context' => app(TranslationPolicy::class)->context($ticket)]];
-            $this->postJson('/api/v1/tickets/'.$ticket->id.'/messages', [...$payload, 'body' => 'Changed original'])->assertUnprocessable();
-            $this->postJson('/api/v1/tickets/'.$ticket->id.'/messages', $payload)->assertOk();
+            $this->postJson('/api/v1/tickets/'.$ticket->id.'/messages', [...$payload, 'body' => 'Changed preview'])->assertOk();
             $message = $ticket->messages()->reorder('id', 'desc')->firstOrFail();
             $this->assertTrue($message->translation_context['same_language']);
+            $this->assertNull($message->translated_subject);
             (new SendTicketReply($message))->handle();
             $sent = $mailer->getSymfonyTransport()->messages()->last()->getOriginalMessage();
-            $this->assertStringStartsWith($body, $sent->getTextBody());
+            $greeting = $language === 'ar' ? 'مرحباً '.$ticket->requester_name.'،' : 'Hello '.$ticket->requester_name.',';
+            $this->assertStringStartsWith($greeting."\n\n".$body."\n\n", $sent->getTextBody());
             $this->assertSame($body, $message->fresh()->body);
             $this->assertSame('sent', $message->fresh()->delivery);
             DB::table('customer_languages')->where('email', $ticket->requester_email)->update(['language' => 'fr']);
             $this->assertFalse(app(TranslationPolicy::class)->ready($message->fresh()));
         }
+        Http::assertNothingSent();
+    }
+
+    public function test_same_language_replies_preserve_whitespace_in_composer_and_saved_reply_review(): void
+    {
+        $this->enableTranslation();
+        $this->actingAs(User::factory()->create());
+        $ticket = $this->ticket();
+        DB::table('customer_languages')->where('email', $ticket->requester_email)->update(['language' => 'en', 'manual' => true]);
+        $original = "  Hello, we can help.\n\nThank you!\n";
+        $translation = ['original_body' => $original, 'subject' => $ticket->subject, 'source_language' => 'en', 'context' => app(TranslationPolicy::class)->context($ticket)];
+        $this->post('/api/v1/tickets/'.$ticket->id.'/messages', ['body' => trim($original), 'translation' => json_encode($translation)], ['Accept' => 'application/json'])->assertOk();
+        $message = $ticket->messages()->latest('id')->firstOrFail();
+        $this->assertSame($original, $message->body);
+        $this->assertTrue(app(TranslationPolicy::class)->ready($message));
+        $message->update(['delivery' => 'held']);
+        $this->postJson('/api/v1/messages/'.$message->id.'/prepare-translation', ['body' => 'Changed preview', 'translation' => $translation])->assertOk();
+        $this->assertSame($original, $message->fresh()->body);
+        $this->assertTrue(app(TranslationPolicy::class)->ready($message->fresh()));
         Http::assertNothingSent();
     }
 
@@ -214,7 +282,7 @@ class TranslationTest extends TestCase
         Mail::shouldReceive('build')->once()->andReturn($mailer);
         (new SendTicketReply($message))->handle();
         $sent = $mailer->getSymfonyTransport()->messages()->first()->getOriginalMessage();
-        $this->assertStringStartsWith("Original reply\n\nOn ", $sent->getTextBody());
+        $this->assertStringStartsWith('Hello '.$ticket->requester_name.",\n\nOriginal reply\n\nBest regards,\nAreviews Team\n\nOn ", $sent->getTextBody());
         $this->assertSame('Re: '.$ticket->subject.' [#'.$ticket->id.']', $sent->getSubject());
         Http::assertNothingSent();
     }
@@ -367,7 +435,7 @@ class TranslationTest extends TestCase
         Mail::shouldReceive('build')->once()->andReturn($mailer);
         (new SendTicketReply($message))->handle();
         $sent = $mailer->getSymfonyTransport()->messages()->first()->getOriginalMessage();
-        $this->assertSame('Hola, podemos ayudar.', $sent->getTextBody());
+        $this->assertSame('Hola '.$ticket->requester_name.",\n\nHola, podemos ayudar.\n\nSaludos cordiales,\nEl equipo de Areviews", $sent->getTextBody());
         $this->assertSame('Re: Necesito ayuda [#'.$ticket->id.']', $sent->getSubject());
         $this->assertSame('Hello, we can help.', $message->fresh()->original_body);
         Http::assertNothingSent();

@@ -1,5 +1,5 @@
 <script setup>
-import { ref, reactive, computed, onMounted } from 'vue';
+import { ref, reactive, computed, onMounted, nextTick } from 'vue';
 import { state, api, notify } from '../store';
 import Modal from '../components/Modal.vue';
 import ActionEditor from '../components/ActionEditor.vue';
@@ -10,7 +10,17 @@ const admin = computed(() => state.user.role === 'admin');
 const triggers = { 'ticket.created': 'Ticket is created', 'ticket.updated': 'Ticket details change', 'message.received': 'Customer message arrives', 'message.sent': 'Agent reply is saved', 'time.elapsed': 'Time passes (checked every minute)' };
 const normalizeActions = actions => Array.isArray(actions) ? actions : Object.entries(actions || {}).filter(([, value]) => value !== null && value !== '').map(([type, value]) => ({ type: type === 'tag' ? 'add_tag' : type, value }));
 function normalizeConditions(conditions = {}) { return conditions.all || conditions.any ? { all: conditions.all || [], any: conditions.any || [] } : { all: Object.entries(conditions).filter(([, v]) => v !== null && v !== '').map(([key, value]) => ({ field: key === 'subject_contains' ? 'subject' : key, operator: key === 'subject_contains' ? 'contains' : 'eq', value: String(value) })), any: [] }; }
-async function load() { try { data.value = await api('workflows'); } catch (e) { notify(e.message, true); } finally { loading.value = false; } }
+const requestedRule = new URLSearchParams(window.location.search).get('rule') || '';
+const focusedName = requestedRule.replace(/^Macro: /, '');
+async function load() {
+    try { data.value = await api('workflows'); }
+    catch (e) { notify(e.message, true); }
+    finally { loading.value = false; }
+    if (requestedRule) {
+        tab.value = requestedRule.startsWith('Macro: ') ? 'macros' : 'rules';
+        await nextTick(); document.querySelector('.automation-card.is-referenced')?.scrollIntoView({ block: 'center' });
+    }
+}
 function edit(record = null) {
     Object.keys(form).forEach(key => delete form[key]);
     Object.assign(form, { name: '', description: '', enabled: tab.value === 'macros', trigger: 'ticket.created', repeat_mode: 'once', interval_minutes: 60, max_runs: 100, conditions: { all: [], any: [] }, actions: [{ type: 'status', value: 'Open' }] }, record ? JSON.parse(JSON.stringify(record)) : {});
@@ -33,7 +43,8 @@ onMounted(load);
 <p v-if="loading" class="muted">Loading workflows…</p>
 <template v-else-if="['rules', 'macros'].includes(tab)">
 <section v-if="tab === 'rules' && admin" class="workflow-presets"><h2>Start with a rule</h2><p class="muted">Choose a preset, review its conditions and message, then save. Presets start paused.</p><div class="preset-buttons"><button v-for="preset in workflowTemplates" :key="preset.name" class="secondary-button" @click="edit(preset)">{{ preset.name }}</button></div></section>
-<div class="automation-list"><article v-for="record in data[tab]" :key="record.id" class="automation-card">
+<p v-if="requestedRule && !data[tab].some(record => record.name === focusedName)" class="muted">“{{ requestedRule }}” is no longer listed here. It may have been renamed or removed.</p>
+<div class="automation-list"><article v-for="record in data[tab]" :key="record.id" class="automation-card" :class="{ 'is-referenced': record.name === focusedName }">
 <div class="automation-card-heading"><span class="setting-icon small"><Icon name="bolt" /></span><div><h3>{{ record.name }}</h3><span class="muted">{{ record.enabled ? 'Active' : 'Paused' }}<template v-if="tab === 'rules'"> · {{ triggers[record.trigger] }} · {{ record.repeat_mode === 'event' ? 'Each matching event' : record.repeat_mode === 'interval' ? (record.trigger === 'time.elapsed' ? 'Every ' : 'At most once every ') + record.interval_minutes + ' minutes' : 'Once per ticket' }}</template></span></div>
 <label class="switch"><input type="checkbox" :checked="record.enabled" :disabled="!admin || saving" @change="save({ ...record, enabled: !record.enabled })" :aria-label="'Enable ' + record.name" /><span /></label><button v-if="admin" class="icon-button" @click="edit(record)" :aria-label="'Edit ' + record.name"><Icon name="edit" /></button><button v-if="admin" class="icon-button" @click="removing = record" :aria-label="'Remove ' + record.name"><Icon name="trash" /></button></div>
 <div class="workflow-summary"><p v-if="record.description">{{ record.description }}</p><p v-if="tab === 'rules'" class="muted">{{ normalizeConditions(record.conditions).all.length }} required conditions · {{ normalizeConditions(record.conditions).any.length }} alternatives · Maximum {{ record.max_runs }} runs per ticket</p><ol><li v-for="(action, index) in normalizeActions(record.actions)" :key="index">{{ actionSummary(action) }}</li></ol></div></article></div>
@@ -48,5 +59,6 @@ onMounted(load);
 <Modal v-if="removing" title="Remove workflow" @close="removing = null"><p>Remove “{{ removing.name }}”? Existing messages will be preserved.</p><div class="form-actions"><button class="secondary-button" @click="removing = null">Cancel</button><button class="primary-button" @click="remove">Remove workflow</button></div></Modal>
 </template>
 <style scoped>
+.automation-card.is-referenced{outline:2px solid var(--accent);outline-offset:3px;scroll-margin-block:24px}
 .workflow-presets{margin-bottom:26px}.workflow-presets h2{font-size:16px;margin-bottom:8px}.preset-buttons{display:flex;flex-wrap:wrap;gap:8px;margin-top:14px}.preset-buttons button{font-size:12px;text-align:start}
 </style>

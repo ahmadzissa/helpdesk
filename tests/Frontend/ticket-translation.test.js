@@ -29,6 +29,42 @@ function mount(google, makeFixture = fixture, detectedLanguage = 'en') {
 }
 const echoGoogle = async (url, options) => ({ ok: true, json: async () => [JSON.parse(options.body)[0][0].map(text => 'ES: ' + text), ['en']] });
 
+test('disabled tickets skip automatic and manual translation and send without a preview', async () => {
+    const mounted = mount(() => assert.fail('Disabled tickets must not translate'), () => ({ ...fixture(), translation_enabled: false }));
+    let requests = 0;
+    globalThis.fetch = async () => { requests++; assert.fail('Disabled tickets must not request translation or detection'); };
+    try {
+        assert.equal(mounted.translation.autoReply.value, false);
+        assert.equal(await mounted.translation.prepareToSend(true), true);
+        assert.equal(await mounted.translation.prepare(), false);
+        await mounted.translation.translateAll(true);
+        await mounted.translation.translateMessage({ id: 7, body: 'Hola' }, true);
+        await mounted.translation.detectLanguage(true);
+        assert.equal(requests, 0);
+        assert.equal(state.workspace.translation.outgoing, true);
+    } finally { mounted.stop(); }
+});
+
+test('turning translation off cancels a pending reply and turning it on restores translation', async () => {
+    let release, started;
+    const requested = new Promise(resolve => { started = resolve; });
+    const gate = new Promise(resolve => { release = resolve; });
+    const mounted = mount(async (url, options) => { started(); await gate; return echoGoogle(url, options); });
+    try {
+        const work = mounted.translation.prepare();
+        await requested;
+        mounted.ticket.value.translation_enabled = false;
+        release();
+        assert.equal(await work, false);
+        assert.equal(mounted.translation.preview.value, null);
+        assert.equal(mounted.translation.translationError.value, '');
+        assert.equal(await mounted.translation.prepareToSend(true), true);
+        mounted.ticket.value.translation_enabled = true;
+        assert.equal(mounted.translation.autoReply.value, true);
+        assert.equal(await mounted.translation.prepare(), true);
+    } finally { mounted.stop(); }
+});
+
 for (const [language, body] of [['en', 'Hello, we can help.'], ['ar', 'مرحباً، يمكننا مساعدتك.']]) {
     test(`matching ${language} replies send immediately even when translated replies require preview`, async () => {
         const makeFixture = () => ({ ...fixture(), translation_context: { ...context, target: language }, customer_language: { language, manual: true } });

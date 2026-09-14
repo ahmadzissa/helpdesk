@@ -133,6 +133,7 @@ class TicketController extends Controller
             'cc' => 'sometimes|array|max:20', 'cc.*' => 'required|email|max:255|distinct',
             'custom_fields' => 'sometimes|array|max:20', 'custom_fields.*' => 'nullable|string|max:500',
             'unread' => 'sometimes|boolean',
+            'translation_enabled' => 'sometimes|boolean',
         ];
     }
 

@@ -20,7 +20,8 @@ for (const [language, body] of [['en', 'Hello, we can help.\n\nThanks!'], ['ar',
         assert.equal(preview.body, body);
         assert.equal(replyPayload(preview).source_language, language);
         preview.body += ' Edited';
-        assert.throws(() => validateReplyPreview(preview), /original reply changed/);
+        validateReplyPreview(preview);
+        assert.equal(preview.body, body);
     });
 }
 

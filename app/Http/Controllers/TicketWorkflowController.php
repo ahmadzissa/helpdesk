@@ -20,8 +20,9 @@ class TicketWorkflowController extends Controller
 {
     public function history(Request $request, Ticket $ticket): JsonResponse
     {
-        $request->validate(['page' => 'sometimes|integer|min:1']);
+        $data = $request->validate(['page' => 'sometimes|integer|min:1', 'folder' => 'sometimes|in:archive', 'q' => 'nullable|string|max:200']);
         $history = Ticket::whereRaw('LOWER(requester_email) = ?', [mb_strtolower($ticket->requester_email)])->where('id', '!=', $ticket->id);
+        $recent = (clone $history)->whereNull('merged_into_id')->where('folder', 'inbox')->orderByDesc('last_activity_at')->orderByDesc('id')->limit(8)->get(['id', 'subject', 'status']);
         $open = (clone $history)->whereNull('merged_into_id')->where('folder', 'inbox')->whereIn('status', ['Open', 'Pending', 'On hold'])->latest()->limit(100)->get(['id', 'subject', 'status', 'mailbox_id', 'created_at']);
         $tokens = $this->words($ticket->subject);
         $open = $open->map(function ($item) use ($tokens, $ticket) {
@@ -31,7 +32,14 @@ class TicketWorkflowController extends Controller
             return [...$item->toArray(), 'similar' => $score >= 0.4, 'merge_allowed' => $item->mailbox_id === $ticket->mailbox_id];
         })->sortByDesc('similar')->values();
 
-        return response()->json(['open' => $open, 'history' => $history->latest()->paginate(20, ['id', 'subject', 'status', 'folder', 'mailbox_id', 'merged_into_id', 'created_at'])]);
+        if (($data['folder'] ?? null) === 'archive') {
+            $history->where('folder', 'archive');
+        }
+        if ($search = trim($data['q'] ?? '')) {
+            $history->whereRaw('LOWER(subject) LIKE ?', ['%'.mb_strtolower($search).'%']);
+        }
+
+        return response()->json(['open' => $open, 'recent' => $recent, 'history' => $history->latest()->paginate(20, ['id', 'subject', 'status', 'folder', 'mailbox_id', 'merged_into_id', 'created_at'])]);
     }
 
     private function words(string $subject): array

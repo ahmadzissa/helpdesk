@@ -3,13 +3,17 @@ import { api, state } from './store.js';
 import { translateText, prepareReply, previewMatches } from './translation.js';
 
 export function useTicketTranslation(ticket, body, privateNote) {
-    const settings = computed(() => state.workspace.translation || { incoming: true, outgoing: false, target: 'en' });
+    const enabled = computed(() => ticket.value?.translation_enabled !== false);
+    const settings = computed(() => {
+        const workspace = state.workspace.translation || { incoming: true, outgoing: false, target: 'en' };
+        return enabled.value ? workspace : { ...workspace, incoming: false, outgoing: false };
+    });
     const original = reactive({}), errors = reactive({}), pending = reactive({});
     const translationError = ref(''), translating = ref(false), preview = ref(null);
     const detecting = ref(false), languageError = ref('');
     let configPromise, detectionPromise, disposed = false, incomingController = new AbortController(), replyController, replySnapshot = false, incomingRun = 0;
     const messageJobs = new Map();
-    const previewReady = computed(() => !privateNote.value && previewMatches(preview.value, body.value, ticket.value?.subject, ticket.value?.translation_context));
+    const previewReady = computed(() => enabled.value && !privateNote.value && previewMatches(preview.value, body.value, ticket.value?.subject, ticket.value?.translation_context));
     const autoReply = computed(() => settings.value.outgoing && !privateNote.value);
     const automaticSend = computed(() => autoReply.value && settings.value.auto_send);
     async function config(fresh = false) {
@@ -24,16 +28,21 @@ export function useTicketTranslation(ticket, body, privateNote) {
         ticket.value.translation_context = preserveContext ? { ...ticket.value.translation_context, target: result.customer_language?.language || null } : result.translation_context;
     }
     function translateMessage(message, force = false) {
+        if (!enabled.value) return Promise.resolve();
         if (messageJobs.has(message.id)) return messageJobs.get(message.id);
+        const controller = incomingController;
         const work = (async () => {
         const target = settings.value.target;
         if (!force && message.translation?.target_language === target && message.translation.source_hash === message.source_hash) return;
         pending[message.id] = true; delete errors[message.id];
         try {
             const currentId = ticket.value.id, { key } = await config();
+            controller.signal.throwIfAborted();
             const format = message.translation_format || 'text';
-            const result = await translateText(message.translation_text || message.body, { target, key, format, signal: incomingController.signal });
+            const result = await translateText(message.translation_text || message.body, { target, key, format, signal: controller.signal });
+            controller.signal.throwIfAborted();
             const saved = await api('messages/' + message.id + '/translation', { method: 'PUT', body: { body: result.text, body_format: format, source_language: result.sourceLanguage, target_language: target, source_hash: message.source_hash } });
+            controller.signal.throwIfAborted();
             if (disposed || ticket.value.id !== currentId || settings.value.target !== target) return;
             message.translation = saved.translation;
             const liveMessage = ticket.value.messages.find(m => m.id === message.id);
@@ -46,6 +55,7 @@ export function useTicketTranslation(ticket, body, privateNote) {
         return work.finally(() => messageJobs.delete(message.id));
     }
     function detectLanguage(force = false) {
+        if (!enabled.value) return Promise.resolve();
         if (detectionPromise) return detectionPromise;
         if (!force && ticket.value.customer_language?.language && (ticket.value.customer_language.manual || ticket.value.customer_language.source_message_id === ticket.value.language_sample?.id)) return Promise.resolve();
         detecting.value = true; languageError.value = '';
@@ -56,7 +66,7 @@ export function useTicketTranslation(ticket, body, privateNote) {
             if (!sample?.body?.trim()) throw new Error('No customer email is available to detect. Select the language manually.');
             await translateMessage(sample, true);
             if (!ticket.value.customer_language?.language) throw new Error('Google could not detect a language. Select the customer language manually.');
-        } catch (e) { languageError.value = e.message; throw e; } finally { detecting.value = false; }
+        } catch (e) { if (e.name !== 'AbortError') languageError.value = e.message; throw e; } finally { detecting.value = false; }
         })().finally(() => { detectionPromise = null; });
         return detectionPromise;
     }
@@ -70,23 +80,23 @@ export function useTicketTranslation(ticket, body, privateNote) {
     async function translateAll(force = false) {
         const run = ++incomingRun;
         delete errors.all;
-        if (!ticket.value || (!force && !settings.value.incoming)) return;
+        if (!ticket.value || !enabled.value || (!force && !settings.value.incoming)) return;
         try {
             await config();
             if (ticket.value.language_sample) await detectLanguage();
             const messages = [...ticket.value.messages].filter(m => m.kind !== 'note').reverse();
             for (const message of messages) {
-                if (disposed || run !== incomingRun || (!force && !settings.value.incoming)) return;
+                if (disposed || !enabled.value || run !== incomingRun || (!force && !settings.value.incoming)) return;
                 await translateMessage(message);
             }
         } catch (e) { if (!disposed && e.name !== 'AbortError') errors.all = e.message; }
     }
     async function prepareToSend(required = autoReply.value) {
-        if (privateNote.value || !required || previewReady.value) return true;
+        if (!enabled.value || privateNote.value || !required || previewReady.value) return true;
         return await prepare() && Boolean(automaticSend.value || preview.value?.sameLanguage);
     }
     async function prepare() {
-        if (translating.value || !body.value.trim()) return false;
+        if (!enabled.value || translating.value || !body.value.trim()) return false;
         translating.value = true; translationError.value = ''; preview.value = null;
         replySnapshot = false;
         const controller = new AbortController(); replyController = controller;
@@ -97,6 +107,7 @@ export function useTicketTranslation(ticket, body, privateNote) {
             controller.signal.throwIfAborted();
             if (ticket.value.id !== currentId) return false;
             ticket.value = latest.ticket;
+            if (!enabled.value) return false;
             await detectLanguage();
             controller.signal.throwIfAborted();
             const input = body.value, subject = ticket.value.subject, context = JSON.parse(JSON.stringify(ticket.value.translation_context));
@@ -111,6 +122,16 @@ export function useTicketTranslation(ticket, body, privateNote) {
             return false;
         } finally { if (replyController === controller) translating.value = false; }
     }
+    watch(enabled, () => {
+        incomingRun++;
+        incomingController.abort();
+        incomingController = new AbortController();
+        replyController?.abort();
+        preview.value = null;
+        translationError.value = '';
+        languageError.value = '';
+        Object.keys(errors).forEach(key => delete errors[key]);
+    }, { flush: 'sync' });
     watch([body, privateNote], () => {
         preview.value = null;
         replyController?.abort();
@@ -124,6 +145,6 @@ export function useTicketTranslation(ticket, body, privateNote) {
         if (ticket.value) translateAll();
     });
     onBeforeUnmount(() => { disposed = true; incomingRun++; incomingController.abort(); replyController?.abort(); });
-    return { settings, original, errors, pending, translateMessage, translateAll,
+    return { enabled, settings, original, errors, pending, translateMessage, translateAll,
         preview, previewReady, translating, translationError, prepare, prepareToSend, autoReply, automaticSend, detecting, languageError, detectLanguage, setLanguage };
 }

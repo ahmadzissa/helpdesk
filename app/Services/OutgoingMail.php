@@ -32,7 +32,13 @@ class OutgoingMail
 
     public function html(Message $message, Email $email): string
     {
-        $html = '<div dir="auto">'.$this->messageHtml($message, $email).'</div>';
+        $content = $this->messageHtml($message, $email);
+        if ($message->kind === 'outbound') {
+            [$greeting, $closing, $team] = $this->replySalutation($message);
+            $content = '<p dir="auto" style="margin:0 0 24px;font-size:20px;font-weight:700">'.e($greeting).'</p>'
+                .$content.'<p dir="auto" style="margin:24px 0 0">'.e($closing).'<br>'.e($team).'</p>';
+        }
+        $html = '<div dir="auto">'.$content.'</div>';
         $previous = $this->previousMessage($message);
         if ($previous) {
             $html .= '<div class="gmail_quote" style="margin-top:24px"><p dir="auto">'.e($this->attribution($previous)).'</p>'
@@ -45,7 +51,7 @@ class OutgoingMail
         }
         if ($attempt) {
             $url = $this->link('mail.optout', $attempt->id);
-            $html .= '<p style="font-size:12px;color:#777">To stop email to '.e($attempt->recipient).', <a href="'.e($url).'">manage email preferences</a>.</p>';
+            $html .= '<p style="font-size:12px;color:#777"><a href="'.e($url).'">Manage email preferences</a> for '.e($attempt->recipient).'.</p>';
             $email->getHeaders()->addTextHeader('List-Unsubscribe', '<'.$url.'>');
         }
 
@@ -62,9 +68,14 @@ class OutgoingMail
 
     public function text(Message $message): string
     {
+        $reply = $message->body;
+        if ($message->kind === 'outbound') {
+            [$greeting, $closing, $team] = $this->replySalutation($message);
+            $reply = $greeting."\n\n".$reply."\n\n".$closing."\n".$team;
+        }
         $previous = $this->previousMessage($message);
         if (! $previous) {
-            return $message->body;
+            return $reply;
         }
         $body = $previous->kind === 'inbound' ? app(EmailReplyContent::class)->text($previous->body) : $previous->body;
         if ($previous->kind === 'inbound' && $previous->email_html) {
@@ -72,7 +83,33 @@ class OutgoingMail
             $body = trim(html_entity_decode(strip_tags(preg_replace('/<br\s*\/?\s*>|<\/(?:p|div|li|tr|h[1-6])>/i', "\n", $html)), ENT_QUOTES | ENT_HTML5, 'UTF-8'));
         }
 
-        return $message->body."\n\n".$this->attribution($previous)."\n".preg_replace('/^/m', '> ', $body);
+        return $reply."\n\n".$this->attribution($previous)."\n".preg_replace('/^/m', '> ', $body);
+    }
+
+    /** @return array{string, string, string} */
+    private function replySalutation(Message $message): array
+    {
+        $context = $message->translation_context ?? [];
+        $language = empty($context['send_original']) ? ($context['target'] ?? 'en') : ($context['source'] ?? 'en');
+        $language = strtolower(explode('-', $language)[0]);
+        [$hello, $closing, $team] = match ($language) {
+            'ar' => ['مرحباً', 'مع أطيب التحيات،', 'فريق Areviews'],
+            'es' => ['Hola', 'Saludos cordiales,', 'El equipo de Areviews'],
+            'fr' => ['Bonjour', 'Cordialement,', 'L’équipe Areviews'],
+            'de' => ['Hallo', 'Mit freundlichen Grüßen', 'Ihr Areviews-Team'],
+            'pt' => ['Olá', 'Atenciosamente,', 'Equipe Areviews'],
+            'it' => ['Ciao', 'Cordiali saluti,', 'Il team Areviews'],
+            'nl' => ['Hallo', 'Met vriendelijke groet,', 'Het Areviews-team'],
+            'tr' => ['Merhaba', 'Saygılarımızla,', 'Areviews Ekibi'],
+            default => ['Hello', 'Best regards,', 'Areviews Team'],
+        };
+        $name = trim(preg_replace('/\s+/u', ' ', $message->ticket->requester_name ?? ''));
+        if (filter_var($name, FILTER_VALIDATE_EMAIL)) {
+            $name = '';
+        }
+        $greeting = $hello.($name !== '' ? ' '.$name : '').($language === 'ar' ? '،' : ',');
+
+        return [$greeting, $closing, $team];
     }
 
     private function attribution(Message $message): string

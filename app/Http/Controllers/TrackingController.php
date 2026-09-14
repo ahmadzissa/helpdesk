@@ -3,10 +3,10 @@
 namespace App\Http\Controllers;
 
 use App\Services\DeliveryTracking;
+use App\Services\EmailPreferences;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\URL;
 
 class TrackingController extends Controller
 {
@@ -21,16 +21,27 @@ class TrackingController extends Controller
         ]);
     }
 
-    public function optOut(Request $request, string $attempt): Response
+    public function optOut(Request $request, string $attempt, EmailPreferences $preferences): Response
     {
         $record = DB::table('mail_delivery_attempts')->where('id', $attempt)->first();
-        abort_unless($record, 404);
-        if ($request->isMethod('post')) {
-            app(DeliveryTracking::class)->record($attempt, 'opt_out', 'optout:'.$attempt, $record->recipient, 'Recipient confirmed the email preference link.');
-
-            return response()->view('mail-preferences', ['email' => $record->recipient, 'complete' => true, 'action' => null]);
+        if (! $record) {
+            return response()->view('mail-preferences', ['state' => 'invalid'], 404, ['Cache-Control' => 'private, no-store']);
         }
 
-        return response()->view('mail-preferences', ['email' => $record->recipient, 'complete' => false, 'action' => URL::signedRoute('mail.optout', ['attempt' => $attempt])]);
+        $updated = false;
+        $error = null;
+        if ($request->isMethod('post')) {
+            $preference = $request->input('preference', 'stop');
+            if (! in_array($preference, ['stop', 'resume'], true)) {
+                $error = 'Choose whether to stop or resume support email.';
+            } else {
+                $updated = $preferences->update($attempt, $preference);
+            }
+        }
+
+        return response()->view('mail-preferences', [
+            'email' => $record->recipient, 'state' => $preferences->status($record->recipient),
+            'updated' => $updated, 'error' => $error, 'action' => $request->fullUrl(),
+        ], $error ? 422 : 200, ['Cache-Control' => 'private, no-store']);
     }
 }

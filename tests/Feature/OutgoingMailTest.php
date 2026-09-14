@@ -34,7 +34,7 @@ class OutgoingMailTest extends TestCase
         $this->assertSame($ticket->requester_email, $sent->getTo()[0]->getAddress());
         $this->assertSame('support@example.com', $sent->getFrom()[0]->getAddress());
         $this->assertSame('cc@example.com', $sent->getCc()[0]->getAddress());
-        $this->assertStringStartsWith("**Hello** customer\n\nOn ", $sent->getTextBody());
+        $this->assertStringStartsWith('Hello '.$ticket->requester_name.",\n\n**Hello** customer\n\nBest regards,\nAreviews Team\n\nOn ", $sent->getTextBody());
         $this->assertStringContainsString('> Question', $sent->getTextBody());
         $this->assertStringContainsString('<strong>Hello</strong>', $sent->getHtmlBody());
         $this->assertStringContainsString('original@example.com', $sent->getHeaders()->get('In-Reply-To')->getBodyAsString());
@@ -95,7 +95,39 @@ class OutgoingMailTest extends TestCase
         $this->assertStringContainsString('Previous delivered reply', $outgoing->html($message, new Email));
         $this->assertStringNotContainsString('Unrelated customer', $outgoing->text($message));
         $first = Message::factory()->create(['kind' => 'outbound', 'body' => 'First reply']);
-        $this->assertSame('First reply', $outgoing->text($first));
+        $this->assertSame('Hello '.$first->ticket->requester_name.",\n\nFirst reply\n\nBest regards,\nAreviews Team", $outgoing->text($first));
+    }
+
+    public function test_greeting_and_signature_are_only_added_to_delivered_content_and_escape_customer_names(): void
+    {
+        $ticket = Ticket::factory()->create(['requester_name' => '<img src=x onerror=alert(1)> Ahmad']);
+        $message = Message::factory()->create(['ticket_id' => $ticket->id, 'kind' => 'outbound', 'body' => 'Your answer.', 'original_body' => 'Your answer.']);
+        $outgoing = app(OutgoingMail::class);
+        $html = $outgoing->html($message, new Email);
+        $this->assertStringContainsString('Hello &lt;img src=x onerror=alert(1)&gt; Ahmad,', $html);
+        $this->assertStringNotContainsString('<img src=x', $html);
+        $this->assertStringContainsString('Best regards,<br>Areviews Team', $html);
+        $this->assertSame($html, $outgoing->html($message, new Email));
+        $this->assertSame('Your answer.', $message->fresh()->body);
+        $this->assertSame('Your answer.', $message->fresh()->original_body);
+        $this->assertStringNotContainsString('Best regards', app(EmailContent::class)->render($message));
+
+        foreach ([null, '', '   ', 'customer@example.com'] as $name) {
+            $ticket->update(['requester_name' => $name]);
+            $message->unsetRelation('ticket');
+            $this->assertSame("Hello,\n\nYour answer.\n\nBest regards,\nAreviews Team", $outgoing->text($message));
+        }
+    }
+
+    public function test_translated_reply_uses_localized_salutation_and_original_reply_does_not_use_customer_target(): void
+    {
+        $ticket = Ticket::factory()->create(['requester_name' => 'أحمد']);
+        $message = Message::factory()->create(['ticket_id' => $ticket->id, 'kind' => 'outbound', 'body' => 'يمكننا مساعدتك.',
+            'translation_context' => ['target' => 'ar']]);
+        $outgoing = app(OutgoingMail::class);
+        $this->assertSame("مرحباً أحمد،\n\nيمكننا مساعدتك.\n\nمع أطيب التحيات،\nفريق Areviews", $outgoing->text($message));
+        $message->update(['body' => 'Your original answer.', 'translation_context' => ['target' => 'ar', 'send_original' => true]]);
+        $this->assertStringStartsWith("Hello أحمد,\n\nYour original answer.", $outgoing->text($message));
     }
 
     public function test_previous_customer_images_are_embedded_without_exposing_authenticated_urls(): void

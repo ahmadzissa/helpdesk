@@ -90,8 +90,11 @@ export function assertProtectedContent(original, translated) {
     if (JSON.stringify(tokens(original)) !== JSON.stringify(tokens(translated))) throw new Error('Translation changed a link, image, email address, or code block. Nothing was sent; try again.');
 }
 export function validateReplyPreview(preview) {
+    if (preview?.sameLanguage) {
+        preview.body = preview.originalBody;
+        preview.subject = preview.originalSubject ?? preview.subject;
+    }
     if (!preview?.body?.trim() || !preview.subject?.trim()) throw new Error('The translated reply and subject cannot be empty.');
-    if (preview.sameLanguage && preview.body !== preview.originalBody) throw new Error('The original reply changed. Check its language again before sending.');
     if ([...preview.body].length > 50000 || [...preview.subject].length > 500 || /[\r\n]/.test(preview.subject)) throw new Error('The translated reply or subject is too long or contains invalid line breaks.');
     assertProtectedContent(preview.originalBody, preview.body);
 }

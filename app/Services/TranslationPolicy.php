@@ -59,7 +59,8 @@ class TranslationPolicy
 
         return ['recipient' => $ticket->requester_email, 'cc' => array_values(array_unique($cc)),
             'target' => $customer?->language, 'subject_hash' => hash('sha256', $ticket->subject),
-            'revision' => $settings['revision'], 'inbound_id' => $this->latestInbound($ticket)?->id];
+            'revision' => $settings['revision'], 'inbound_id' => $this->latestInbound($ticket)?->id,
+            'translation_enabled' => $ticket->translation_enabled];
     }
 
     public function rules(): array
@@ -74,12 +75,17 @@ class TranslationPolicy
     /** The browser submits the reviewed result; the server only checks its context and stores it. */
     public function outgoing(Ticket $ticket, string $body, ?array $translation, bool $sendOriginal = false): array
     {
-        $required = $this->settings()['outgoing'];
+        $required = $ticket->translation_enabled && $this->settings()['outgoing'];
+        if (! $ticket->translation_enabled) {
+            $body = $translation['original_body'] ?? $body;
+            $translation = null;
+            $sendOriginal = true;
+        }
         if ($sendOriginal) {
             abort_if($required, 422, 'Translate this reply into the customer language before sending.');
             abort_if($translation !== null, 422, 'Choose either the translated reply or the original reply.');
 
-            return ['original_body' => $body, 'translated_subject' => null,
+            return ['body' => $body, 'original_body' => $body, 'translated_subject' => null,
                 'translation_context' => [...$this->context($ticket), 'send_original' => true,
                     'body_hash' => hash('sha256', $body), 'original_hash' => hash('sha256', $body)]];
         }
@@ -93,10 +99,12 @@ class TranslationPolicy
         abort_unless($this->detectionCurrent($ticket, $context), 409, 'A new customer email needs language detection. Refresh and translate again.');
         abort_unless($translation['context'] == $context, 409, 'The recipient, language, subject, or settings changed. Translate this reply again.');
         $sameLanguage = strcasecmp($translation['source_language'], $context['target']) === 0;
-        abort_if($sameLanguage && $body !== $translation['original_body'], 422, 'Send the unchanged original reply when its language matches the customer language.');
+        if ($sameLanguage) {
+            $body = $translation['original_body'];
+        }
         $this->assertProtectedContent($translation['original_body'], $body);
 
-        return ['original_body' => $translation['original_body'], 'translated_subject' => $translation['subject'],
+        return ['body' => $body, 'original_body' => $translation['original_body'], 'translated_subject' => $sameLanguage ? null : $translation['subject'],
             'translation_context' => [...$context, 'source' => $translation['source_language'], 'same_language' => $sameLanguage,
                 'body_hash' => hash('sha256', $body), 'original_hash' => hash('sha256', $translation['original_body'])]];
     }
@@ -114,11 +122,12 @@ class TranslationPolicy
     public function ready(Message $message): bool
     {
         $context = $message->translation_context;
-        if ($this->settings()['outgoing'] && (! $context || ! empty($context['send_original']) || empty($context['target']))) {
+        $required = $message->ticket->translation_enabled && $this->settings()['outgoing'];
+        if ($required && (! $context || ! empty($context['send_original']) || empty($context['target']))) {
             return false;
         }
         if (! $context) {
-            return ! $this->settings()['outgoing'];
+            return ! $required;
         }
         $expected = $this->context($message->ticket);
         if (empty($context['send_original']) && ! $this->detectionCurrent($message->ticket, $expected)) {
@@ -128,7 +137,7 @@ class TranslationPolicy
             if (! empty($context['send_original']) && in_array($key, ['target', 'inbound_id'], true)) {
                 continue;
             }
-            if (($context[$key] ?? null) !== $value) {
+            if (($context[$key] ?? ($key === 'translation_enabled' ? true : null)) !== $value) {
                 return false;
             }
         }
