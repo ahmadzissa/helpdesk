@@ -260,7 +260,7 @@ class TicketController extends Controller
                 $message = $ticket->messages()->create(['body' => $data['body'], 'kind' => $private ? 'note' : 'outbound', 'user_id' => $request->user()->id,
                     'author_name' => $request->user()->name, 'author_email' => $ticket->mailbox?->email, ...($private ? ['delivery' => null] : app(MailSafety::class)->prepare($ticket->mailbox)), 'attachments' => $files, ...$translation]);
                 app(InlineImages::class)->bind($message, $ticket, $request->user()->id);
-                $status = $data['status'] ?? $ticket->status;
+                $status = $data['status'] ?? ($private ? $ticket->status : 'Pending');
                 $ticket->update(['unread' => false, 'status' => $status, 'last_activity_at' => now(), 'resolved_at' => in_array($status, ['Solved', 'Closed']) ? ($ticket->resolved_at ?? now()) : null]);
                 TicketDraft::where('ticket_id', $ticket->id)->where('user_id', $request->user()->id)->delete();
                 Activity::create(['ticket_id' => $ticket->id, 'user_id' => $request->user()->id, 'description' => ($private ? 'Added private note to #' : 'Replied to #').$ticket->id]);
@@ -304,6 +304,9 @@ class TicketController extends Controller
             $delivery = app(MailSafety::class)->prepare($locked->ticket->mailbox);
             abort_if($delivery['delivery'] === 'held', 409, 'Sending is paused. An administrator must review and reactivate it first.');
             $locked->update($delivery);
+            if ($locked->ticket->status === 'Open') {
+                $locked->ticket->update(['status' => 'Pending', 'resolved_at' => null]);
+            }
             SendTicketReply::dispatch($locked)->afterCommit();
         });
 

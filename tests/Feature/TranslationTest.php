@@ -240,6 +240,7 @@ class TranslationTest extends TestCase
         $this->actingAs(User::factory()->create());
         $ticket = $this->ticket();
         $message = app(WorkflowActions::class)->message($ticket, 'Original reply', false, 'Macro');
+        $ticket->update(['status' => 'Open']);
         $this->postJson('/api/v1/messages/'.$message->id.'/prepare-translation', ['body' => 'Changed reply', 'send_original' => true])->assertConflict();
         $this->postJson('/api/v1/messages/'.$message->id.'/prepare-translation', ['body' => 'Original reply', 'send_original' => true])
             ->assertUnprocessable();
@@ -247,6 +248,7 @@ class TranslationTest extends TestCase
         Queue::assertNothingPushed();
         $this->postJson('/api/v1/messages/'.$message->id.'/prepare-translation', $this->payload($ticket, 'Original reply'))
             ->assertOk()->assertJsonPath('delivery', 'queued');
+        $this->assertSame('Pending', $ticket->fresh()->status);
         $this->assertDatabaseCount('messages', 1);
         $this->assertSame('Hola, podemos ayudar.', $message->fresh()->body);
         $this->assertTrue(app(TranslationPolicy::class)->ready($message->fresh()));
@@ -332,7 +334,9 @@ class TranslationTest extends TestCase
         $this->postJson('/api/v1/messages/'.$message->id.'/retry')->assertConflict();
         Queue::assertNothingPushed();
         app(MailSafety::class)->resume($admin->id, 'Reviewed delivery settings', 0);
+        $ticket->update(['status' => 'Open']);
         $this->postJson('/api/v1/messages/'.$message->id.'/retry')->assertAccepted();
+        $this->assertSame('Pending', $ticket->fresh()->status);
         Queue::assertPushed(SendTicketReply::class, 1);
         $this->postJson('/api/v1/messages/'.$message->id.'/prepare-translation', $this->payload($ticket))->assertConflict();
     }

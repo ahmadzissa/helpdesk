@@ -104,6 +104,9 @@ class TranslationController extends Controller
             $message->update(['body' => $data['body'], ...$translated, ...app(MailSafety::class)->prepare($message->ticket->mailbox)]);
             Activity::create(['ticket_id' => $message->ticket_id, 'user_id' => $request->user()->id, 'description' => ($sendOriginal ? 'Chose original language for reply #' : 'Prepared browser translation for reply #').$message->id.'.']);
             if ($message->delivery === 'queued') {
+                if ($message->ticket->status === 'Open') {
+                    $message->ticket->update(['status' => 'Pending', 'resolved_at' => null]);
+                }
                 SendTicketReply::dispatch($message)->afterCommit();
             }
         });

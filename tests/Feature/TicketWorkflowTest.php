@@ -19,6 +19,32 @@ class TicketWorkflowTest extends TestCase
 {
     use RefreshDatabase;
 
+    public function test_customer_replies_default_to_pending_and_honor_an_explicit_status(): void
+    {
+        Queue::fake();
+        $this->actingAs(User::factory()->create());
+        $ticket = Ticket::factory()->create(['status' => 'Open']);
+        $this->postJson('/api/v1/tickets/'.$ticket->id.'/messages', ['body' => 'Thank you for contacting us.'])
+            ->assertOk()->assertJsonPath('data.status', 'Pending');
+        $this->assertNull($ticket->fresh()->resolved_at);
+        $this->postJson('/api/v1/tickets/'.$ticket->id.'/messages', ['body' => 'Everything is resolved.', 'status' => 'Closed'])
+            ->assertOk()->assertJsonPath('data.status', 'Closed');
+        $this->assertNotNull($ticket->fresh()->resolved_at);
+        $this->postJson('/api/v1/tickets/'.$ticket->id.'/messages', ['body' => 'Following up on your request.'])
+            ->assertOk()->assertJsonPath('data.status', 'Pending');
+        $this->assertNull($ticket->fresh()->resolved_at);
+    }
+
+    public function test_private_notes_preserve_the_current_status_by_default(): void
+    {
+        Queue::fake();
+        $this->actingAs(User::factory()->create());
+        $ticket = Ticket::factory()->create(['status' => 'Open']);
+        $this->postJson('/api/v1/tickets/'.$ticket->id.'/messages', ['body' => 'Checking internally.', 'private' => true])
+            ->assertOk()->assertJsonPath('data.status', 'Open');
+        Queue::assertNothingPushed();
+    }
+
     public function test_merge_preserves_history_cancels_follow_ups_and_routes_future_replies_to_parent(): void
     {
         Queue::fake();

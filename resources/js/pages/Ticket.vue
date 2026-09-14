@@ -19,7 +19,7 @@ const route = useNavigation();
 const ticket = ref(null), related = ref([]), activity = ref([]), loading = ref(true), error = ref('');
 const body = ref(''), privateNote = ref(false), expanded = ref(false), details = ref(window.innerWidth > 1100), sending = ref(false), draftState = ref(''), editor = ref(), scroll = ref(), files = ref([]), fileInput = ref();
 const picker = ref(false), recording = ref(false), editing = ref(false), replySearch = ref(''), newTag = ref('');
-const editForm = reactive({}), sendStatus = ref('Open'), formatVisible = ref(true);
+const editForm = reactive({}), sendStatus = ref('Pending'), formatVisible = ref(true);
 const sendingAccounts = computed(() => state.workspace.mailboxes.filter(mailbox => mailbox.sending_enabled));
 const mailboxUnavailable = computed(() => !sendingAccounts.value.some(mailbox => mailbox.id === ticket.value?.mailbox_id));
 const inlineInput = ref(), uploadingImage = ref(false), deliveryMessage = ref(null), imagePreview = ref(false);
@@ -41,7 +41,7 @@ async function load() {
     try {
         const data = await api('tickets/' + route.params.id);
         ticket.value = data.ticket; related.value = data.related; activity.value = data.activity;
-        sendStatus.value = data.ticket.status;
+        sendStatus.value = data.draft?.private ? data.ticket.status : 'Pending';
         body.value = data.draft?.body || ''; privateNote.value = data.draft?.private || false;
         if (ticket.value.unread && !ticket.value.merged_into_id) { await api('tickets/' + ticket.value.id, { method: 'PATCH', body: { unread: false } }); state.refresh++; }
         setTimeout(() => { loaded = true; scrollBottom(); }, 0);
@@ -64,6 +64,7 @@ watch([body, privateNote], () => {
     draftTimer = setTimeout(() => saveDraft().catch(e => notify(e.message, true)), 700);
 });
 const removeDraftGuard = guardDraftNavigation(router, { isDirty: hasUnsavedDraft, isSending: () => sending.value, save: saveDraft, onError: message => notify(message, true) });
+watch(privateNote, value => { sendStatus.value = value ? ticket.value?.status || 'Open' : 'Pending'; });
 function beforeUnload(event) { if (hasUnsavedDraft() || sending.value) { event.preventDefault(); event.returnValue = ''; } }
 onBeforeUnmount(() => {
     ticketRefresher.dispose(); document.removeEventListener('visibilitychange', refreshVisibleTicket);
@@ -96,7 +97,7 @@ function dropImage(event) { const file = [...(event.dataTransfer?.files || [])].
 async function update(changes, message = 'Ticket updated') {
     ticketMutations++;
     ticketRefresher.invalidate();
-    try { const result = await api('tickets/' + ticket.value.id, { method: 'PATCH', body: changes }); ticketRefresher.invalidate(); Object.assign(ticket.value, result.data); if (changes.status) sendStatus.value = result.data.status; state.refresh++; if (message) notify(message); }
+    try { const result = await api('tickets/' + ticket.value.id, { method: 'PATCH', body: changes }); ticketRefresher.invalidate(); Object.assign(ticket.value, result.data); if (changes.status && privateNote.value) sendStatus.value = result.data.status; state.refresh++; if (message) notify(message); }
     catch (e) { notify(e.message, true); throw e; }
     finally { ticketMutations--; }
 }
@@ -135,6 +136,7 @@ async function send(sendOriginal = false) {
         files.value.forEach(file => data.append('attachments[]', file));
         const result = await api('tickets/' + ticket.value.id + '/messages', { method: 'POST', body: data });
         ticket.value = result.data; savedDraftRevision = draftRevision; skipNextDraft = true; body.value = ''; translationRequested.value = false; files.value = []; draftState.value = ''; state.refresh++; await refreshTicket();
+        sendStatus.value = privateNote.value ? ticket.value.status : 'Pending';
         const delivery = ticket.value.messages.at(-1)?.delivery;
         notify(privateNote.value ? 'Private note added' : delivery === 'held' ? 'Reply held. Sending is paused for review.' : delivery === 'queued' ? 'Reply queued for delivery' : 'Reply saved. This mailbox is not connected.');
         refreshSendingSafety().catch(() => {});
