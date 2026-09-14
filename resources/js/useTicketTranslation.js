@@ -83,7 +83,7 @@ export function useTicketTranslation(ticket, body, privateNote) {
     }
     async function prepareToSend(required = autoReply.value) {
         if (privateNote.value || !required || previewReady.value) return true;
-        return await prepare() && Boolean(automaticSend.value);
+        return await prepare() && Boolean(automaticSend.value || preview.value?.sameLanguage);
     }
     async function prepare() {
         if (translating.value || !body.value.trim()) return false;

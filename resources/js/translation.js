@@ -91,6 +91,7 @@ export function assertProtectedContent(original, translated) {
 }
 export function validateReplyPreview(preview) {
     if (!preview?.body?.trim() || !preview.subject?.trim()) throw new Error('The translated reply and subject cannot be empty.');
+    if (preview.sameLanguage && preview.body !== preview.originalBody) throw new Error('The original reply changed. Check its language again before sending.');
     if ([...preview.body].length > 50000 || [...preview.subject].length > 500 || /[\r\n]/.test(preview.subject)) throw new Error('The translated reply or subject is too long or contains invalid line breaks.');
     assertProtectedContent(preview.originalBody, preview.body);
 }
@@ -181,14 +182,48 @@ export function createTranslator({ fetchImpl = (...args) => fetch(...args), time
     };
 }
 export const translateText = createTranslator();
+export function createLanguageDetector({ fetchImpl = (...args) => fetch(...args), timeoutMs = 20000 } = {}) {
+    return async function detect(text, { key, signal } = {}) {
+        if (!key) throw new Error('Add a Google browser translation key in Settings → Translation.');
+        const input = text.replace(protectedPattern, ' ').trim();
+        if (!input) return null;
+        const queries = chunks(input);
+        const response = await fetchImpl('https://translation.googleapis.com/language/translate/v2/detect', {
+            method: 'POST', credentials: 'omit', referrerPolicy: 'strict-origin-when-cross-origin',
+            headers: { 'Content-Type': 'application/json', 'X-Goog-Api-Key': key }, body: JSON.stringify({ q: queries }),
+            signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]) : AbortSignal.timeout(timeoutMs),
+        });
+        signal?.throwIfAborted();
+        if (!response.ok) {
+            const error = new Error(response.status === 429 ? 'Google translation quota reached. Try again later.' : 'Could not check the reply language. Try again.');
+            error.status = response.status;
+            throw error;
+        }
+        const detections = (await response.json())?.data?.detections;
+        if (!Array.isArray(detections) || detections.length !== queries.length) throw new Error('Google returned an incomplete language detection. Try again.');
+        const detected = detections.map(result => normalizeLanguage(result?.[0]?.language));
+        return detected[0] && detected.every(language => language === detected[0]) ? detected[0] : null;
+    };
+}
+export const detectReplyLanguage = createLanguageDetector();
 export function previewMatches(preview, body, subject, context) {
     return Boolean(preview && preview.originalBody === body && preview.originalSubject === subject && JSON.stringify(preview.context) === JSON.stringify(context));
 }
-export async function prepareReply(body, subject, context, options, translate = translateText) {
+export async function prepareReply(body, subject, context, options, translate = translateText, detect = detectReplyLanguage) {
     if (!context?.target) throw new Error('Detect or select the customer language before translating your reply.');
-    const reply = await translate(body, { ...options, source: 'auto', target: context.target });
+    let source, detectionUnavailable = false;
+    try { source = await detect(body, options); }
+    catch (error) {
+        options.signal?.throwIfAborted();
+        if (![403, 404].includes(error.status)) throw error;
+        detectionUnavailable = true;
+    }
+    options.signal?.throwIfAborted();
+    let sameLanguage = Boolean(source && source.toLowerCase() === context.target.toLowerCase());
+    const reply = sameLanguage ? { text: body, sourceLanguage: source } : await translate(body, { ...options, source: 'auto', target: context.target });
+    sameLanguage ||= detectionUnavailable && Boolean(reply.sourceLanguage && normalizeLanguage(reply.sourceLanguage)?.toLowerCase() === context.target.toLowerCase());
     if (!reply.text.trim() || !subject.trim() || [...subject].length > 500 || /[\r\n]/.test(subject)) throw new Error('Google returned an invalid reply or the subject is invalid. Nothing was sent.');
-    const preview = { originalBody: body, originalSubject: subject, body: reply.text, subject,
+    const preview = { originalBody: body, originalSubject: subject, body: sameLanguage ? body : reply.text, subject, sameLanguage,
         source: reply.sourceLanguage || options.adminLanguage || 'en', context: JSON.parse(JSON.stringify(context)) };
     validateReplyPreview(preview);
     return preview;

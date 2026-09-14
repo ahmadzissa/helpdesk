@@ -19,7 +19,7 @@ onMounted(load);
 <label class="check-label"><input type="checkbox" v-model="form.outgoing" />Automatically use the customer’s language for replies</label>
 <p class="muted">Google detects the source language of the latest customer email. That language is saved by email address across tickets; you can correct it in the ticket. Your reply uses that language. Private notes stay as written.</p>
 <label class="check-label"><input type="checkbox" v-model="form.auto_send" :disabled="!form.outgoing" />Translate and send replies automatically when I click Send</label>
-<p class="muted">Skip the preview step and send in the customer’s language. If translation fails, your draft is kept so you can retry or send it in the original language.</p>
+<p class="muted">Skip the preview step and send in the customer’s language. If translation fails, your draft is kept so you can retry. Replies already in the customer’s language are sent unchanged; other replies require successful translation.</p>
 <div class="info-banner"><Icon name="clock" /><p>Automated replies, macros, and due follow-ups appear in Undelivered until you open their translation action. The automatic setting skips their preview too. The sending pause and recipient restrictions still apply.</p></div>
 <label>Google browser translation API key<input v-model="form.key" type="password" autocomplete="new-password" :placeholder="hasKey ? 'Configured · leave blank to keep' : 'Enter your browser API key'" /></label>
 <p class="muted">Uses the same Google translation flow as Areviews. The key is sent only to signed-in agents’ browsers. Use a browser key restricted to your helpdesk website. Email text is sent directly from the browser to Google.</p>

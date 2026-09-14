@@ -1,11 +1,40 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createTranslator, normalizeLanguage, prepareReply, previewMatches, replyPayload } from '../../resources/js/translation.js';
+import { createTranslator, createLanguageDetector, normalizeLanguage, prepareReply, previewMatches, replyPayload, validateReplyPreview } from '../../resources/js/translation.js';
 
 const key = 'synthetic-test-browser-key';
 const ok = value => ({ ok: true, json: async () => value });
 const primary = (text, language = 'es') => ok([Array.isArray(text) ? text : [text], [language]]);
 const requestText = options => JSON.parse(options.body)[0][0];
+
+for (const [language, body] of [['en', 'Hello, we can help.\n\nThanks!'], ['ar', 'مرحباً، يمكننا مساعدتك.\n\nشكراً لك!']]) {
+    test(`a reply already in ${language} keeps its exact original without requesting translation`, async () => {
+        const detect = createLanguageDetector({ fetchImpl: async (url, options) => {
+            assert.equal(url, 'https://translation.googleapis.com/language/translate/v2/detect');
+            assert.equal(options.credentials, 'omit');
+            assert.ok(JSON.parse(options.body).q[0].includes(body.split('\n')[0]));
+            return ok({ data: { detections: [[{ language }]] } });
+        } });
+        const preview = await prepareReply(body, 'Subject', { target: language }, { key }, () => assert.fail('No translation request should be made'), detect);
+        assert.equal(preview.sameLanguage, true);
+        assert.equal(preview.body, body);
+        assert.equal(replyPayload(preview).source_language, language);
+        preview.body += ' Edited';
+        assert.throws(() => validateReplyPreview(preview), /original reply changed/);
+    });
+}
+
+test('failed language checks cannot silently send an original reply', async () => {
+    const detect = createLanguageDetector({ fetchImpl: async () => ({ ok: false, status: 429 }) });
+    await assert.rejects(prepareReply('Hello', 'Subject', { target: 'en' }, { key }, () => assert.fail('Quota errors must stop'), detect), /quota/);
+});
+
+test('keys without a detection endpoint use existing translation detection and preserve matching originals', async () => {
+    const detect = createLanguageDetector({ fetchImpl: async () => ({ ok: false, status: 403 }) });
+    const preview = await prepareReply('Hello!', 'Subject', { target: 'en' }, { key }, async () => ({ text: 'Hello.', sourceLanguage: 'en' }), detect);
+    assert.equal(preview.body, 'Hello!');
+    assert.equal(preview.sameLanguage, true);
+});
 
 test('Areviews response preserves originals, source language, paragraphs, links, email addresses, images and code', async () => {
     const source = 'Hola\n\nVisita https://example.com/orders y customer@example.com\n![captura](/api/v1/inline-images/01234567-89ab-cdef-0123-456789abcdef)\n' + String.fromCharCode(96) + 'order_id' + String.fromCharCode(96);
@@ -84,7 +113,7 @@ test('abort stops translation before any fallback or partial preview', async () 
 test('reply preview binds to the exact source body, subject, recipient and language', async () => {
     const context = { recipient: 'synthetic@example.com', cc: [], target: 'es', revision: 1, subject_hash: 'hash' };
     const translate = async (text, options) => { assert.equal(options.target, 'es'); return { text: 'ES: ' + text, sourceLanguage: 'en' }; };
-    const preview = await prepareReply('Hello', 'My order', context, { key }, translate);
+    const preview = await prepareReply('Hello', 'My order', context, { key }, translate, async () => 'en');
     assert.ok(previewMatches(preview, 'Hello', 'My order', context));
     assert.equal(previewMatches(preview, 'Hello edited', 'My order', context), false);
     assert.equal(previewMatches(preview, 'Hello', 'New subject', context), false);
@@ -98,7 +127,7 @@ test('reply preview binds to the exact source body, subject, recipient and langu
 test('only the reply body is translated and the subject is unchanged', async () => {
     const calls = [];
     const translate = async text => { calls.push(text); return { text: 'Hola', sourceLanguage: 'en' }; };
-    const preview = await prepareReply('Hello', 'Subject', { target: 'es' }, { key }, translate);
+    const preview = await prepareReply('Hello', 'Subject', { target: 'es' }, { key }, translate, async () => 'en');
     assert.deepEqual(calls, ['Hello']);
     assert.equal(preview.subject, 'Subject');
 });

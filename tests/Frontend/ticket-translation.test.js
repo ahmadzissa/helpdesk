@@ -11,7 +11,7 @@ const renderer = createRenderer({
 });
 const context = { recipient: 'synthetic@example.com', cc: [], target: 'es', subject_hash: 'subject', revision: 1, inbound_id: 7 };
 const fixture = () => ({ id: 1, subject: 'My order', messages: [], translation_context: { ...context }, customer_language: { language: 'es', manual: true }, language_sample: null });
-function mount(google, makeFixture = fixture) {
+function mount(google, makeFixture = fixture, detectedLanguage = 'en') {
     state.workspace.translation = { incoming: false, outgoing: true, target: 'en', revision: 1 };
     const ticket = ref(makeFixture()), body = ref('Hello, we can help.'), privateNote = ref(false);
     let translation;
@@ -19,6 +19,7 @@ function mount(google, makeFixture = fixture) {
         let result;
         if (url === '/api/v1/translation/config') result = { key: 'synthetic-test-key', settings: state.workspace.translation };
         else if (url === '/api/v1/tickets/1') result = { ticket: makeFixture() };
+        else if (url.endsWith('/v2/detect')) result = { data: { detections: [[{ language: detectedLanguage }]] } };
         else return google(url, options);
         return { ok: true, json: async () => result };
     };
@@ -27,6 +28,23 @@ function mount(google, makeFixture = fixture) {
     return { ticket, body, privateNote, translation, stop: () => app.unmount() };
 }
 const echoGoogle = async (url, options) => ({ ok: true, json: async () => [JSON.parse(options.body)[0][0].map(text => 'ES: ' + text), ['en']] });
+
+for (const [language, body] of [['en', 'Hello, we can help.'], ['ar', 'مرحباً، يمكننا مساعدتك.']]) {
+    test(`matching ${language} replies send immediately even when translated replies require preview`, async () => {
+        const makeFixture = () => ({ ...fixture(), translation_context: { ...context, target: language }, customer_language: { language, manual: true } });
+        const mounted = mount(() => assert.fail('Matching replies must not be translated'), makeFixture, language);
+        mounted.body.value = body;
+        try {
+            assert.equal(await mounted.translation.prepareToSend(), true);
+            assert.equal(mounted.translation.preview.value.body, body);
+            assert.equal(mounted.translation.preview.value.sameLanguage, true);
+            mounted.body.value += '!';
+            assert.equal(mounted.translation.previewReady.value, false);
+            mounted.ticket.value.translation_context.target = 'fr';
+            assert.equal(mounted.translation.previewReady.value, false);
+        } finally { mounted.stop(); }
+    });
+}
 
 test('the Vue composer invalidates a preview immediately after editing the original or switching to a note', async () => {
     const mounted = mount(echoGoogle);
