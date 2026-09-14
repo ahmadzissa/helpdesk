@@ -4,6 +4,7 @@ import { router } from '@inertiajs/vue3';
 import { useNavigation } from '../useNavigation';
 import { appUrl } from '../urls';
 import { createTicketRefresher } from '../ticketRefresh';
+import { ticketTimeline } from '../ticketTimeline';
 import EmailMessageBody from '../components/EmailMessageBody.vue';
 import { guardDraftNavigation } from '../draftNavigation';
 import { state, api, notify, initials, statusClass, refreshSendingSafety } from '../store';
@@ -19,6 +20,8 @@ import { useTicketTranslation } from '../useTicketTranslation';
 import { languageName, replyPayload, validateReplyPreview } from '../translation';
 const route = useNavigation();
 const ticket = ref(null), related = ref([]), activity = ref([]), loading = ref(true), error = ref('');
+const recentTickets = computed(() => [...new Map([...(ticket.value?.merged_tickets || []), ...(requesterHistory.value?.recent || [])].map(item => [item.id, item])).values()]);
+const conversation = computed(() => ticketTimeline(ticket.value?.messages, activity.value));
 const body = ref(''), privateNote = ref(false), expanded = ref(false), details = ref(window.innerWidth > 1100), sending = ref(false), draftState = ref(''), editor = ref(), scroll = ref(), files = ref([]), fileInput = ref();
 const picker = ref(false), recording = ref(false), editing = ref(false), replySearch = ref(''), newTag = ref('');
 const editForm = reactive({}), sendStatus = ref('Pending'), formatVisible = ref(true);
@@ -89,7 +92,8 @@ const ticketRefresher = createTicketRefresher({
     fetchTicket: id => api('tickets/' + id),
     apply: result => {
         const atBottom = !scroll.value || scroll.value.scrollHeight - scroll.value.scrollTop - scroll.value.clientHeight < 100;
-        const changed = ticket.value?.messages.at(-1)?.id !== result.ticket.messages.at(-1)?.id;
+        const changed = ticket.value?.messages.at(-1)?.id !== result.ticket.messages.at(-1)?.id
+            || activity.value.at(-1)?.id !== result.activity.at(-1)?.id;
         ticket.value = result.ticket; related.value = result.related; activity.value = result.activity;
         if (changed && atBottom) nextTick(scrollBottom);
     },
@@ -222,11 +226,13 @@ async function saveDetails() {
             <button class="icon-button" @click="markUnread" title="Mark unread" aria-label="Mark unread"><Icon name="mail" /></button>
             <button class="icon-button" @click="update({ status: 'Closed' }).catch(() => {})" title="Close ticket" aria-label="Close ticket"><Icon name="check" /></button>
         </div></div><span class="status-badge" :class="statusClass(ticket.status)"><Icon name="circle" :size="12" />{{ ticket.status }}</span><button class="icon-button" @click="details = !details" aria-label="Toggle ticket information" :aria-expanded="details"><Icon name="panel" /></button></header>
-        <div v-if="ticket.merged_into_id" class="folder-notice merged-notice">Merged into <Link :href="$appUrl('/tickets/' + ticket.merged_into_id)">#{{ ticket.merged_into_id }} · Open main conversation</Link>. This original ticket is read only.</div>
+        <div v-if="ticket.merged_into_id" class="folder-notice merged-notice"><Icon name="merged" /> Merged into <Link :href="$appUrl('/tickets/' + ticket.merged_into_id)">#{{ ticket.merged_into_id }} · {{ ticket.merged_parent?.subject || 'Open main conversation' }}</Link>. This ticket is read only. New customer replies appear in the main ticket.</div>
         <div ref="scroll" class="conversation-scroll">
             <div class="ticket-body-content">
                 <div class="day-divider"><span>{{ new Date(ticket.created_at).toLocaleDateString(undefined, { month: 'long', day: 'numeric', year: 'numeric' }) }}</span></div>
-                <template v-for="message in ticket.messages" :key="message.id">
+                <template v-for="{ message, entry, key } in conversation" :key="key">
+                <div v-if="entry" class="conversation-event conversation-activity"><p><strong v-if="entry.user?.name">{{ entry.user.name }} · </strong>{{ entry.description }}</p><time :datetime="entry.created_at">{{ dateTime(entry.created_at) }}</time></div>
+                <template v-else>
                 <div v-if="message.rule_name" class="conversation-event"><Icon name="bolt" :size="14" /><p>Automation <Link :href="$appUrl('/automations') + '?rule=' + encodeURIComponent(message.rule_name)">{{ message.rule_name }}</Link> {{ automationAction(message) }}<template v-if="message.kind !== 'note'"> to <strong>{{ ticket.requester_name || ticket.requester_email }}</strong></template>.</p><time :datetime="message.created_at">{{ dateTime(message.created_at) }}</time></div>
                 <article class="message-card" :class="{ outbound: message.kind === 'outbound', note: message.kind === 'note', automated: !!message.rule_name }">
                     <header>
@@ -242,6 +248,8 @@ async function saveDetails() {
                     <footer v-if="message.delivery" :class="{ danger: message.delivery === 'failed' }"><span v-if="message.delivery" :title="message.delivery_error"><Icon :name="message.delivery === 'failed' ? 'alert' : 'check'" :size="13" />{{ { saved: 'Saved · email not connected', sent: 'Sent · SMTP accepted', delivered: 'Delivery confirmed', suppressed: 'Recipient suppressed · not sent', translation_pending: 'Awaiting browser translation · not sent', queued: 'Queued for delivery', sending: 'Sending', held: 'Held for review · not sent', failed: 'Delivery failed' }[message.delivery] }}</span><button v-if="['failed', 'held'].includes(message.delivery) && !state.workspace.sending_safety?.paused && !ticket.merged_into_id && message.ticket_id === ticket.id" class="text-button" @click="retryMessage(message)">{{ message.delivery === 'held' ? 'Release this reply' : 'Retry delivery' }}</button><button v-if="message.kind === 'outbound' && !message.attempt_id && ['translation_pending', 'held', 'saved'].includes(message.delivery) && !ticket.merged_into_id && message.ticket_id === ticket.id" class="text-button" @click="reviewTranslation(message)">{{ !translationEnabled ? 'Review original reply' : translationSettings.outgoing && translationSettings.auto_send ? 'Translate & send reply' : 'Translate & review reply' }}</button><span v-if="message.opened_at" :title="dateTime(message.opened_at)">Email opened</span><button v-if="message.kind === 'outbound'" class="text-button" @click="deliveryMessage = message">Message status</button></footer>
                 </article>
                 </template>
+                </template>
+                <nav v-if="ticket.merged_tickets?.length" class="merged-ticket-links" aria-label="Merged tickets"><Link v-for="item in ticket.merged_tickets" :key="item.id" :href="$appUrl('/tickets/' + item.id)" :title="'View original messages in ticket #' + item.id"><Icon name="merged" :size="18" /><span dir="auto">{{ item.subject }}</span><small>#{{ item.id }}</small><span class="status-badge" :class="statusClass(item.status)">{{ item.status }}</span></Link></nav>
             </div>
         </div>
         <div v-if="!ticket.merged_into_id" class="composer-wrap"><div class="ticket-body-content">
@@ -285,13 +293,12 @@ async function saveDetails() {
             <InspectorSection v-if="ticket.custom_field_definitions?.length" title="Custom fields"><TicketCustomFields :ticket="ticket" :save-field="saveCustomField" /></InspectorSection>
         </fieldset>
             <InspectorSection title="Requester’s tickets" class="requester-tickets">
-                <div class="requester-tickets-heading"><strong>Recent tickets</strong><button v-if="!ticket.merged_into_id" type="button" class="text-button" @click="ticketTools?.openHistory(false)">Merge</button></div>
+                <div class="requester-tickets-heading"><strong>Recent tickets</strong><button v-if="!ticket.merged_into_id" type="button" class="text-button" @click="ticketTools?.openMerge()">Merge</button></div>
                 <p v-if="!requesterHistory" class="muted">Loading requester’s tickets…</p><p v-else-if="requesterHistory.error" class="error-message" role="alert">{{ requesterHistory.error }} <button type="button" class="text-button" @click="ticketTools?.openHistory(false)">Retry</button></p>
-                <div v-for="item in requesterHistory?.recent || []" :key="item.id" class="requester-ticket-row"><span class="status-badge" :class="statusClass(item.status)">{{ item.status }}</span><Link :href="$appUrl('/tickets/' + item.id)">{{ item.subject }}</Link></div>
-                <p v-if="requesterHistory && !requesterHistory.error && !requesterHistory.recent?.length" class="muted">No other recent tickets.</p>
+                <div v-for="item in recentTickets" :key="item.id" class="requester-ticket-row"><span class="status-badge" :class="statusClass(item.status)">{{ item.status }}</span><Link :href="$appUrl('/tickets/' + item.id)">{{ item.subject }}<span v-if="item.merged_into_id" class="merge-indicator" :title="'Merged into #' + item.merged_into_id" :aria-label="'Merged into ticket #' + item.merged_into_id"><Icon name="merged" :size="16" /></span></Link></div>
+                <p v-if="requesterHistory && !requesterHistory.error && !recentTickets.length" class="muted">No other recent tickets.</p>
                 <div class="requester-archive"><strong>Archived tickets</strong><p><button type="button" class="text-button" @click="ticketTools?.openHistory(true)">Search Archive</button> to view this requester’s archived tickets.</p></div>
             </InspectorSection>
-            <InspectorSection title="Recent activity" class="inspector-section"><div v-for="entry in activity.slice(0, 5)" :key="entry.id" class="small-activity"><i />{{ entry.description }}</div></InspectorSection>
         </div>
     </aside>
 </main>
@@ -304,8 +311,11 @@ async function saveDetails() {
 </template>
 
 <style>
+.merged-ticket-links{display:grid;gap:10px;margin:24px 0}.merged-ticket-links>a{display:flex;align-items:center;gap:10px;padding:10px 0;color:var(--accent-ink);font-size:13px}.merged-ticket-links>a>span[dir]{overflow-wrap:anywhere}.merged-ticket-links small{color:var(--muted)}.merge-indicator{display:inline-flex;vertical-align:middle;margin-inline-start:6px;color:var(--text)}
+.ticket-translation-toggle{display:flex;align-items:center;justify-content:space-between;gap:12px;font-size:12px}.translation-switch{width:36px;height:22px;padding:3px;border:0;border-radius:20px;background:var(--muted);flex-shrink:0;cursor:pointer}.translation-switch[aria-checked="true"]{background:var(--accent-ink)}.translation-switch>span{display:block;width:16px;height:16px;border-radius:50%;background:#fff}.translation-switch[aria-checked="true"]>span{transform:translateX(14px)}.translation-switch:focus-visible{outline:2px solid var(--accent-ink);outline-offset:3px}.translation-switch:disabled{opacity:.5;cursor:default}
 .conversation-event{display:flex;align-items:baseline;gap:9px;margin:24px 0 18px;color:var(--muted);font-size:11px;line-height:1.6}
 .conversation-event>svg{align-self:center;flex-shrink:0}.conversation-event p{flex:1;margin:0;overflow-wrap:anywhere}.conversation-event a{color:var(--accent-ink)}.conversation-event strong{color:var(--text);font-weight:500}.conversation-event time{white-space:nowrap;font-size:10px}
+.conversation-activity{margin:10px 0;font-size:12px}.conversation-activity time{font-size:11px}.conversation-activity+.message-card{margin-top:24px}
 .requester-tickets-heading{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:14px;font-size:12px}.requester-ticket-row{display:flex;align-items:baseline;gap:10px;margin:10px 0;font-size:12px;line-height:1.6}.requester-ticket-row .status-badge{flex-shrink:0}.requester-ticket-row>a{color:var(--accent-ink);overflow-wrap:anywhere}.requester-archive{margin-top:24px;font-size:12px;line-height:1.8}.requester-archive strong{display:block;margin-bottom:8px}.requester-archive button{display:inline;font-size:inherit}.requester-archive p{color:var(--muted)}
 .inspector-translation .inspector-section-content{display:grid;gap:12px}.inspector-section-content>.ticket-custom-fields{padding:0;border:0}
 @media(max-width:640px){.conversation-event{flex-wrap:wrap}.conversation-event time{flex-basis:100%;margin-inline-start:23px}}

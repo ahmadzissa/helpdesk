@@ -20,9 +20,9 @@ class TicketWorkflowController extends Controller
 {
     public function history(Request $request, Ticket $ticket): JsonResponse
     {
-        $data = $request->validate(['page' => 'sometimes|integer|min:1', 'folder' => 'sometimes|in:archive', 'q' => 'nullable|string|max:200']);
+        $data = $request->validate(['page' => 'sometimes|integer|min:1', 'folder' => 'sometimes|in:archive', 'q' => 'nullable|string|max:200', 'merge_candidates' => 'sometimes|boolean']);
         $history = Ticket::whereRaw('LOWER(requester_email) = ?', [mb_strtolower($ticket->requester_email)])->where('id', '!=', $ticket->id);
-        $recent = (clone $history)->whereNull('merged_into_id')->where('folder', 'inbox')->orderByDesc('last_activity_at')->orderByDesc('id')->limit(8)->get(['id', 'subject', 'status']);
+        $recent = (clone $history)->where('folder', 'inbox')->orderByDesc('last_activity_at')->orderByDesc('id')->limit(8)->get(['id', 'subject', 'status', 'merged_into_id']);
         $open = (clone $history)->whereNull('merged_into_id')->where('folder', 'inbox')->whereIn('status', ['Open', 'Pending', 'On hold'])->latest()->limit(100)->get(['id', 'subject', 'status', 'mailbox_id', 'created_at']);
         $tokens = $this->words($ticket->subject);
         $open = $open->map(function ($item) use ($tokens, $ticket) {
@@ -35,11 +35,14 @@ class TicketWorkflowController extends Controller
         if (($data['folder'] ?? null) === 'archive') {
             $history->where('folder', 'archive');
         }
+        if ($request->boolean('merge_candidates')) {
+            $history->whereNull('merged_into_id')->where('mailbox_id', $ticket->mailbox_id)->whereNotIn('folder', ['spam', 'trash']);
+        }
         if ($search = trim($data['q'] ?? '')) {
             $history->whereRaw('LOWER(subject) LIKE ?', ['%'.mb_strtolower($search).'%']);
         }
 
-        return response()->json(['open' => $open, 'recent' => $recent, 'history' => $history->latest()->paginate(20, ['id', 'subject', 'status', 'folder', 'mailbox_id', 'merged_into_id', 'created_at'])]);
+        return response()->json(['open' => $open, 'recent' => $recent, 'history' => $history->latest()->paginate(20, ['id', 'subject', 'status', 'folder', 'mailbox_id', 'merged_into_id', 'created_at', 'last_activity_at'])]);
     }
 
     private function words(string $subject): array
@@ -60,6 +63,7 @@ class TicketWorkflowController extends Controller
             foreach ($data['ticket_ids'] as $id) {
                 $child = $locked[$id];
                 $child->assertWritable();
+                abort_if(in_array($child->folder, ['spam', 'trash']), 422, 'Restore selected tickets before merging.');
                 abort_unless($child->id !== $parent->id && mb_strtolower($child->requester_email) === mb_strtolower($parent->requester_email) && $child->mailbox_id === $parent->mailbox_id, 422, 'Merge tickets from the same requester and mailbox only.');
             }
             foreach ($data['ticket_ids'] as $id) {
@@ -70,7 +74,8 @@ class TicketWorkflowController extends Controller
                 Message::whereIn('ticket_id', $all)->where('delivery', 'queued')->update(['delivery' => 'held', 'delivery_error' => 'Ticket merged. Review and write any further reply in the main conversation.']);
                 DB::table('follow_ups')->whereIn('ticket_id', $all)->where('state', 'pending')->update(['state' => 'cancelled', 'result' => 'Ticket merged', 'updated_at' => now()]);
                 $parent->update(['tags' => array_values(array_unique([...($parent->tags ?? []), ...($child->tags ?? [])]))]);
-                Activity::create(['ticket_id' => $parent->id, 'user_id' => $request->user()->id, 'description' => 'Merged #'.$id.' into #'.$parent->id.'. Original messages preserved.']);
+                Activity::create(['ticket_id' => $parent->id, 'user_id' => $request->user()->id, 'description' => 'Merged #'.$id.' into this ticket. Earlier messages remain in #'.$id.'.']);
+                Activity::create(['ticket_id' => $id, 'user_id' => $request->user()->id, 'description' => 'Merged into #'.$parent->id.'. Future customer replies go to the main ticket.']);
             }
             $parent->update(['last_activity_at' => now()]);
         }, 5);

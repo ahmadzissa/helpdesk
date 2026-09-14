@@ -28,9 +28,9 @@ class TicketWorkflowTest extends TestCase
         Ticket::factory()->create(['requester_email' => $ticket->requester_email, 'folder' => 'archive', 'subject' => 'Billing question']);
         Ticket::factory()->create(['requester_email' => 'another@example.com', 'folder' => 'archive', 'subject' => 'Widget question']);
         Ticket::factory()->create(['requester_email' => $ticket->requester_email, 'folder' => 'trash', 'subject' => 'Widget deleted']);
-        Ticket::factory()->create(['requester_email' => $ticket->requester_email, 'folder' => 'inbox', 'merged_into_id' => $ticket->id]);
-        $this->getJson('/api/v1/tickets/'.$ticket->id.'/history')->assertOk()->assertJsonCount(1, 'recent')->assertJsonPath('recent.0.id', $recent->id)->assertJsonPath('recent.0.status', 'Closed');
-        $this->getJson('/api/v1/tickets/'.$ticket->id.'/history?folder=archive&q=WIDGET')->assertOk()->assertJsonCount(1, 'history.data')->assertJsonPath('history.data.0.id', $archived->id)->assertJsonCount(1, 'recent');
+        $merged = Ticket::factory()->create(['requester_email' => $ticket->requester_email, 'folder' => 'inbox', 'status' => 'Closed', 'merged_into_id' => $ticket->id]);
+        $this->getJson('/api/v1/tickets/'.$ticket->id.'/history')->assertOk()->assertJsonCount(2, 'recent')->assertJsonPath('recent.0.id', $merged->id)->assertJsonPath('recent.0.status', 'Closed')->assertJsonPath('recent.1.id', $recent->id);
+        $this->getJson('/api/v1/tickets/'.$ticket->id.'/history?folder=archive&q=WIDGET')->assertOk()->assertJsonCount(1, 'history.data')->assertJsonPath('history.data.0.id', $archived->id)->assertJsonCount(2, 'recent');
         $this->getJson('/api/v1/tickets/'.$ticket->id.'/history?folder=trash')->assertUnprocessable();
     }
 
@@ -116,7 +116,8 @@ class TicketWorkflowTest extends TestCase
         $this->assertSame($child->id, $original->fresh()->ticket_id);
         $this->assertSame('held', $queued->fresh()->delivery);
         $this->assertDatabaseHas('follow_ups', ['ticket_id' => $child->id, 'state' => 'cancelled']);
-        $this->getJson('/api/v1/tickets/'.$parent->id)->assertJsonCount(2, 'ticket.messages');
+        $this->getJson('/api/v1/tickets/'.$parent->id)->assertJsonCount(0, 'ticket.messages')->assertJsonPath('ticket.merged_tickets.0.id', $child->id);
+        $this->getJson('/api/v1/tickets/'.$child->id)->assertJsonCount(2, 'ticket.messages')->assertJsonPath('ticket.merged_parent.id', $parent->id)->assertJsonPath('ticket.status', 'Closed');
         $this->patchJson('/api/v1/tickets/'.$parent->id, ['requester_email' => 'different@example.com'])->assertConflict();
         $this->patchJson('/api/v1/tickets/'.$child->id, ['status' => 'Open'])->assertConflict();
         $this->postJson('/api/v1/tickets/'.$child->id.'/messages', ['body' => 'No'])->assertConflict();
@@ -124,7 +125,38 @@ class TicketWorkflowTest extends TestCase
         $this->postJson('/api/v1/messages/'.$queued->id.'/retry')->assertConflict();
         $incoming = app(IncomingMail::class)->import($box, ['external_id' => 'new@example.com', 'from_email' => $parent->requester_email, 'subject' => 'Re', 'body' => 'Further context', 'references' => ['child@example.com']]);
         $this->assertSame($parent->id, $incoming->id);
+        $subjectReply = app(IncomingMail::class)->import($box, ['external_id' => 'subject-reply@example.com', 'from_email' => $parent->requester_email, 'subject' => 'Re: [#'.$child->id.']', 'body' => 'Another reply']);
+        $this->assertSame($parent->id, $subjectReply->id);
+        $this->getJson('/api/v1/tickets/'.$parent->id)->assertJsonCount(2, 'ticket.messages')->assertJsonPath('ticket.messages.0.body', 'Further context');
+        $this->getJson('/api/v1/tickets/'.$child->id)->assertJsonCount(2, 'ticket.messages');
         $this->getJson('/api/v1/tickets')->assertJsonPath('total', 1);
+    }
+
+    public function test_merged_tickets_are_searchable_with_relationship_indicators_but_excluded_from_normal_lists_and_counts(): void
+    {
+        $this->actingAs(User::factory()->create());
+        $parent = Ticket::factory()->create(['subject' => 'Matching main ticket']);
+        $child = Ticket::factory()->create(['subject' => 'Matching merged ticket', 'requester_email' => $parent->requester_email, 'mailbox_id' => $parent->mailbox_id, 'status' => 'Closed']);
+        $child->forceFill(['merged_into_id' => $parent->id, 'last_activity_at' => now()->subDays(90)])->save();
+        $this->getJson('/api/v1/tickets')->assertJsonPath('total', 1)->assertJsonPath('tickets.0.merged_tickets_count', 1);
+        $this->getJson('/api/v1/tickets?search=Matching')->assertJsonPath('total', 2)->assertJsonPath('counts.all', 1)
+            ->assertJsonPath('tickets.0.merged_tickets_count', 1)->assertJsonPath('tickets.1.merged_into_id', $parent->id);
+        $this->getJson('/api/v1/tickets?search=merged')->assertJsonPath('total', 1)->assertJsonPath('tickets.0.id', $child->id);
+    }
+
+    public function test_merge_candidates_only_include_eligible_requester_tickets_from_the_same_mailbox(): void
+    {
+        $this->actingAs(User::factory()->create());
+        $parent = Ticket::factory()->create();
+        $fields = ['requester_email' => $parent->requester_email, 'mailbox_id' => $parent->mailbox_id];
+        $eligible = Ticket::factory()->create([...$fields, 'subject' => 'Archived billing', 'folder' => 'archive']);
+        Ticket::factory()->create([...$fields, 'folder' => 'trash']);
+        Ticket::factory()->create([...$fields, 'folder' => 'spam']);
+        Ticket::factory()->create([...$fields, 'merged_into_id' => $parent->id]);
+        Ticket::factory()->create([...$fields, 'mailbox_id' => Mailbox::factory()->create()->id]);
+        Ticket::factory()->create(['mailbox_id' => $parent->mailbox_id]);
+        $this->getJson('/api/v1/tickets/'.$parent->id.'/history?merge_candidates=1&q=billing')->assertOk()
+            ->assertJsonPath('history.total', 1)->assertJsonPath('history.data.0.id', $eligible->id);
     }
 
     public function test_invalid_merge_is_atomic_and_history_includes_old_archived_tickets_case_insensitively(): void

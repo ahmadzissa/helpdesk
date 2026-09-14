@@ -21,6 +21,35 @@ class OutgoingMailTest extends TestCase
 {
     use RefreshDatabase;
 
+    public function test_reply_links_are_clickable_and_blue_in_the_ticket_and_outgoing_email(): void
+    {
+        $body = 'Visit https://example.com/order?one=1&two=2 or www.example.org. [Open guide](<https://example.com/guide>)';
+        $message = Message::factory()->create(['kind' => 'outbound', 'body' => $body]);
+        foreach ([app(EmailContent::class)->render($message), app(OutgoingMail::class)->html($message, new Email)] as $html) {
+            $document = new \DOMDocument;
+            $document->loadHTML($html);
+            $links = $document->getElementsByTagName('a');
+            $this->assertCount(3, $links);
+            $this->assertSame('https://example.com/order?one=1&two=2', $links->item(0)->getAttribute('href'));
+            $this->assertSame('https://www.example.org', $links->item(1)->getAttribute('href'));
+            $this->assertSame('Open guide', $links->item(2)->textContent);
+            foreach ($links as $link) {
+                $this->assertSame('color:#0057d9;text-decoration:underline', $link->getAttribute('style'));
+                $this->assertSame('_blank', $link->getAttribute('target'));
+                $this->assertSame('noopener noreferrer', $link->getAttribute('rel'));
+            }
+        }
+        $this->assertSame($body, $message->fresh()->body);
+    }
+
+    public function test_reply_link_rendering_preserves_code_and_does_not_enable_unsafe_links(): void
+    {
+        $html = Message::renderBody('`https://example.com/code` [Unsafe](javascript:alert%281%29)', 'outbound');
+        $this->assertStringContainsString('<code>https://example.com/code</code>', $html);
+        $this->assertStringNotContainsString('href="javascript:', $html);
+        $this->assertStringNotContainsString('href="https://example.com/code"', $html);
+    }
+
     public function test_reply_transport_builds_safe_multipart_email_and_thread_headers(): void
     {
         $box = Mailbox::factory()->create(['email' => 'support@example.com', 'smtp_host' => 'smtp.example.com', 'sending_enabled' => true]);

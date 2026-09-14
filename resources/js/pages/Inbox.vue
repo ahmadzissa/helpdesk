@@ -17,7 +17,8 @@ const changes = reactive({ status: '', priority: '', assignee_id: '', team_id: '
 const view = computed(() => route.query.view || 'all');
 const { search, label: searchLabel } = useTicketSearch(view);
 const title = computed(() => ({ all: 'All tickets', mine: 'Assigned to me', unassigned: 'Unassigned', unread: 'Unread', undelivered: 'Undelivered', archive: 'Archive', spam: 'Spam', trash: 'Trash' }[view.value] || state.workspace.views.find(v => 'saved:' + v.id === view.value)?.name || view.value));
-const allSelected = computed(() => tickets.value.length > 0 && selected.value.length === tickets.value.length);
+const selectableTickets = computed(() => tickets.value.filter(ticket => !ticket.merged_into_id));
+const allSelected = computed(() => selectableTickets.value.length > 0 && selected.value.length === selectableTickets.value.length);
 const someSelected = computed(() => selected.value.length > 0 && !allSelected.value);
 let timer, polling, requestId = 0;
 onMounted(() => { polling = setInterval(() => { if (view.value !== 'archive' && !document.hidden && !selected.value.length && !busy.value && !fetching.value) load(false, true); }, 30000); });
@@ -57,7 +58,7 @@ watch([view, () => state.scope, sort, () => state.refresh, search], (values, pre
     else if (values[4] !== previous?.[4]) { requestId++; timer = setTimeout(() => load(false, false, false), 250); }
     else load(false, true);
 }, { immediate: true });
-function toggleAll() { selected.value = allSelected.value ? [] : tickets.value.map(t => t.id); }
+function toggleAll() { selected.value = allSelected.value ? [] : selectableTickets.value.map(t => t.id); }
 async function bulk() {
     const payload = Object.fromEntries(Object.entries(changes).filter(([key, value]) => key !== 'tag' && value !== ''));
     if (payload.assignee_id === 'unassigned') payload.assignee_id = null;
@@ -108,19 +109,19 @@ function delivery(ticket) {
     </form>
     <p v-if="refreshError" class="error-message" role="alert">Couldn’t refresh your tickets. {{ refreshError }} <button type="button" class="text-button" @click="load(false, true)">Try again</button></p>
     <div class="ticket-table" role="table" aria-label="Tickets">
-        <div class="table-head" role="row"><span role="columnheader" class="select-cell"><input type="checkbox" :checked="allSelected" :indeterminate.prop="someSelected" @change="toggleAll" :disabled="!tickets.length" aria-label="Select all tickets" /><span class="mobile-select-text">Select all</span></span><span role="columnheader">Customer</span><span role="columnheader">Conversation</span><span role="columnheader">Status</span><span role="columnheader" class="assignee-cell">Assignee</span><span role="columnheader" class="delivery-cell">Email activity</span><span role="columnheader">Received</span><span role="columnheader"><button class="icon-button" @click="sort = sort === 'newest' ? 'oldest' : 'newest'" :aria-label="sort === 'newest' ? 'Sort oldest first' : 'Sort newest first'" :title="sort === 'newest' ? 'Newest first' : 'Oldest first'"><Icon name="sort" :size="16" /></button></span></div>
+        <div class="table-head" role="row"><span role="columnheader" class="select-cell"><input type="checkbox" :checked="allSelected" :indeterminate.prop="someSelected" @change="toggleAll" :disabled="!selectableTickets.length" aria-label="Select all tickets" /><span class="mobile-select-text">Select all</span></span><span role="columnheader">Customer</span><span role="columnheader">Conversation</span><span role="columnheader">Status</span><span role="columnheader" class="assignee-cell">Assignee</span><span role="columnheader" class="delivery-cell">Email activity</span><span role="columnheader">Received</span><span role="columnheader"><button class="icon-button" @click="sort = sort === 'newest' ? 'oldest' : 'newest'" :aria-label="sort === 'newest' ? 'Sort oldest first' : 'Sort newest first'" :title="sort === 'newest' ? 'Newest first' : 'Oldest first'"><Icon name="sort" :size="16" /></button></span></div>
         <div v-if="loadError" class="empty-state"><Icon name="alert" :size="30" /><h2>Couldn’t load your tickets</h2><p>{{ loadError }}</p><button class="secondary-button" @click="load()">Try again</button></div>
         <div v-else-if="loading" class="skeleton-list"><div v-for="n in 7" :key="n" class="skeleton-row"><i /><div /><span /></div></div>
         <template v-else>
             <div v-for="ticket in tickets" :key="ticket.id" class="ticket-row" :class="{ unread: ticket.unread, selected: selected.includes(ticket.id) }" role="row">
-                <span class="select-cell" role="cell"><input type="checkbox" v-model="selected" :value="ticket.id" :aria-label="'Select ticket ' + ticket.id" /><i v-if="ticket.unread" class="unread-dot" /></span>
+                <span class="select-cell" role="cell"><input type="checkbox" v-model="selected" :value="ticket.id" :disabled="Boolean(ticket.merged_into_id)" :aria-label="'Select ticket ' + ticket.id" /><i v-if="ticket.unread" class="unread-dot" /></span>
                 <span class="customer-cell" role="cell"><span class="avatar" :class="'avatar-' + ticket.id % 5">{{ initials(ticket.requester_name || ticket.requester_email) }}</span><span class="row-person"><strong :title="ticket.requester_email">{{ ticket.requester_email }}</strong></span></span>
-                <span class="conversation-cell" role="cell"><Link :href="$appUrl('/tickets/' + ticket.id)" :title="ticket.subject">{{ ticket.subject }}</Link><span class="ticket-tags"><span class="ticket-id">#{{ ticket.id }}</span><span v-if="state.user.preferences?.source_indicators !== false && ticket.mailbox" class="source-label"><i :style="{ background: ticket.mailbox.color }" />{{ ticket.mailbox.name }}</span><span v-for="tag in ticket.tags?.slice(0, 2)" class="tag" :key="tag">{{ tag }}</span><span v-if="ticket.tags?.length > 2" class="tag">+{{ ticket.tags.length - 2 }}</span></span></span>
+                <span class="conversation-cell" role="cell"><Link :href="$appUrl('/tickets/' + ticket.id)" :title="ticket.subject">{{ ticket.subject }}<span v-if="ticket.merged_into_id || ticket.merged_tickets_count" class="merge-indicator" :title="ticket.merged_into_id ? 'Merged into #' + ticket.merged_into_id : 'Main ticket · ' + ticket.merged_tickets_count + ' merged tickets'" :aria-label="ticket.merged_into_id ? 'Merged into ticket #' + ticket.merged_into_id : 'Main ticket with merged tickets'"><Icon :name="ticket.merged_into_id ? 'merged' : 'merge'" :size="17" /></span></Link><span class="ticket-tags"><span class="ticket-id">#{{ ticket.id }}</span><span v-if="state.user.preferences?.source_indicators !== false && ticket.mailbox" class="source-label"><i :style="{ background: ticket.mailbox.color }" />{{ ticket.mailbox.name }}</span><span v-for="tag in ticket.tags?.slice(0, 2)" class="tag" :key="tag">{{ tag }}</span><span v-if="ticket.tags?.length > 2" class="tag">+{{ ticket.tags.length - 2 }}</span></span></span>
                 <span role="cell" class="status-cell"><span class="status-badge" :class="statusClass(ticket.status)"><Icon :name="['Solved', 'Closed'].includes(ticket.status) ? 'solved' : ['Pending', 'On hold'].includes(ticket.status) ? 'clock' : 'circle'" :size="13" />{{ ticket.status }}</span></span>
                 <span class="assignee-cell" role="cell"><span v-if="ticket.assignee" class="mini-avatar">{{ initials(ticket.assignee.name) }}</span><Icon v-else name="users" :size="15" />{{ ticket.assignee?.name.split(' ')[0] || 'Unassigned' }}</span>
                 <span class="delivery-cell" :class="{ danger: ticket.latest_message?.delivery === 'failed' }" role="cell"><Icon :name="delivery(ticket).icon" :size="15" />{{ delivery(ticket).label }}</span>
                 <span class="time-cell" role="cell" :title="new Date(ticket.last_activity_at).toLocaleString()">{{ relativeTime(ticket.last_activity_at) }}</span>
-                <span role="cell" class="actions-cell"><TicketRowMenu :ticket="ticket" :disabled="busy" @action="action(ticket, $event)" /></span>
+                <span role="cell" class="actions-cell"><TicketRowMenu v-if="!ticket.merged_into_id" :ticket="ticket" :disabled="busy" @action="action(ticket, $event)" /></span>
             </div>
             <div v-if="!tickets.length" class="empty-state"><div class="empty-icon"><Icon :name="search ? 'search' : 'inbox'" :size="30" /></div><h2>{{ search ? 'No matching conversations' : 'A little breathing room.' }}</h2><p>{{ search ? 'Try a different subject, requester, ticket ID, or tag.' : 'There are no tickets in this view. New conversations will appear here.' }}</p><button v-if="search" class="secondary-button" @click="search = ''">Clear search</button><button v-else class="secondary-button" @click="newTicket"><Icon name="plus" />Create a ticket</button></div>
         </template>
@@ -135,3 +136,7 @@ function delivery(ticket) {
     <div class="form-actions"><button type="button" class="secondary-button" :disabled="busy" @click="deleting = null">Cancel</button><button type="button" class="danger-button" :disabled="busy" @click="deleteSelected">{{ busy ? 'Deleting…' : 'Delete permanently' }}</button></div>
 </Modal>
 </template>
+
+<style scoped>
+.merge-indicator{display:inline-flex;vertical-align:middle;margin-inline-start:6px;color:var(--text)}
+</style>

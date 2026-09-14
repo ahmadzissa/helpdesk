@@ -7,6 +7,8 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Support\Str;
+use League\CommonMark\Extension\CommonMark\Node\Inline\Link;
+use League\CommonMark\Extension\DefaultAttributes\DefaultAttributesExtension;
 
 class Message extends Model
 {
@@ -22,7 +24,17 @@ class Message extends Model
             return nl2br(e($body));
         }
 
-        return Str::markdown($body, ['html_input' => 'strip', 'allow_unsafe_links' => false, 'renderer' => ['soft_break' => '<br />']]);
+        return Str::markdown($body, [
+            'html_input' => 'strip',
+            'allow_unsafe_links' => false,
+            'renderer' => ['soft_break' => '<br />'],
+            'autolink' => ['default_protocol' => 'https'],
+            'default_attributes' => ['attributes' => [Link::class => [
+                'style' => 'color:#0057d9;text-decoration:underline',
+                'target' => '_blank',
+                'rel' => 'noopener noreferrer',
+            ]]],
+        ], [new DefaultAttributesExtension]);
     }
 
     protected function authorEmail(): Attribute

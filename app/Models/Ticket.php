@@ -53,6 +53,16 @@ class Ticket extends Model
         abort_if($this->merged_into_id !== null, 409, 'This ticket was merged into #'.$this->merged_into_id.'. Open the main conversation to make changes.');
     }
 
+    public function mergedTickets(): HasMany
+    {
+        return $this->hasMany(self::class, 'merged_into_id')->orderBy('id');
+    }
+
+    public function mergedParent(): BelongsTo
+    {
+        return $this->belongsTo(self::class, 'merged_into_id');
+    }
+
     public function setTagsAttribute(?array $tags): void
     {
         $tags = array_values($tags ?? []);

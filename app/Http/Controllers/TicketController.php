@@ -28,9 +28,12 @@ use Symfony\Component\HttpFoundation\StreamedResponse;
 
 class TicketController extends Controller
 {
-    private function scope(Request $request): Builder
+    private function scope(Request $request, bool $includeMerged = false): Builder
     {
-        $query = Ticket::whereNull('merged_into_id');
+        $query = Ticket::query();
+        if (! $includeMerged) {
+            $query->whereNull('merged_into_id');
+        }
         if ($request->filled('mailbox_id')) {
             $query->where('mailbox_id', $request->integer('mailbox_id'));
         }
@@ -48,10 +51,12 @@ class TicketController extends Controller
         if ($request->boolean('counts_only')) {
             return response()->json($summary);
         }
-        $query = $this->scope($request);
+        $query = $this->scope($request, $request->filled('search'));
         $view = $request->input('view', 'all');
         if (in_array($view, ['archive', 'spam', 'trash'])) {
             $query->where('folder', $view);
+        } elseif ($request->filled('search')) {
+            $query->where('folder', 'inbox')->where(fn ($query) => $query->whereNotNull('merged_into_id')->orWhere('last_activity_at', '>', now()->subDays(Ticket::ARCHIVE_AFTER_DAYS)));
         } else {
             $query->inInbox();
         }
@@ -80,7 +85,7 @@ class TicketController extends Controller
                 $q->where('subject', 'like', $term)->orWhere('requester_email', 'like', $term)->orWhere('requester_name', 'like', $term)->orWhere('id', 'like', $term)->orWhere('tags', 'like', $term)->orWhereHas('messages', fn ($m) => $m->where('body', 'like', $term));
             });
         }
-        $tickets = $query->with(['mailbox:id,name,email,color', 'assignee:id,name', 'team:id,name'])->orderBy('last_activity_at', $request->input('sort') === 'oldest' ? 'asc' : 'desc')->orderByDesc('id')->paginate(50);
+        $tickets = $query->with(['mailbox:id,name,email,color', 'assignee:id,name', 'team:id,name'])->withCount('mergedTickets')->orderBy('last_activity_at', $request->input('sort') === 'oldest' ? 'asc' : 'desc')->orderByDesc('id')->paginate(50);
         $this->loadLatestMessages($tickets->getCollection());
 
         return response()->json(['tickets' => TicketResource::collection($tickets)->resolve(), 'total' => $tickets->total(), 'current_page' => $tickets->currentPage(), 'last_page' => $tickets->lastPage(), ...$summary]);
@@ -155,16 +160,13 @@ class TicketController extends Controller
 
     public function show(Request $request, Ticket $ticket): JsonResponse
     {
-        $ticket->load(['messages', 'mailbox:id,name,email,color,sending_enabled', 'assignee:id,name', 'team:id,name']);
-        $children = Ticket::where('merged_into_id', $ticket->id)->pluck('id')->all();
-        if ($children !== []) {
-            $ticket->setRelation('messages', Message::whereIn('ticket_id', [$ticket->id, ...$children])->orderBy('created_at')->orderBy('id')->get());
-        }
+        $ticket->load(['messages', 'mailbox:id,name,email,color,sending_enabled', 'assignee:id,name', 'team:id,name',
+            'mergedTickets:id,subject,status,merged_into_id,last_activity_at', 'mergedParent:id,subject,status']);
 
         return response()->json(['ticket' => (new TicketResource($ticket))->resolve(),
             'draft' => TicketDraft::where('ticket_id', $ticket->id)->where('user_id', $request->user()->id)->first(),
             'related' => Ticket::where('requester_email', $ticket->requester_email)->where('id', '!=', $ticket->id)->latest()->limit(8)->get(['id', 'subject', 'status']),
-            'activity' => Activity::where('ticket_id', $ticket->id)->latest()->limit(30)->get(),
+            'activity' => Activity::where('ticket_id', $ticket->id)->with('user:id,name')->orderBy('created_at')->orderBy('id')->get(),
         ]);
     }
 
