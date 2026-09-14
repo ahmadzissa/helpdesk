@@ -93,7 +93,7 @@ class TranslationController extends Controller
 
     public function prepare(Request $request, Message $message, TranslationPolicy $policy): JsonResponse
     {
-        $data = $request->validate(['body' => 'required|string|max:50000', ...$policy->rules(), 'translation' => 'required_unless:send_original,true|nullable|array:original_body,subject,source_language,context']);
+        $data = $request->validate(['body' => 'required|string|max:50000', 'assignee_id' => 'sometimes|nullable|integer|exists:users,id', ...$policy->rules(), 'translation' => 'required_unless:send_original,true|nullable|array:original_body,subject,source_language,context']);
         DB::transaction(function () use ($message, $data, $policy, $request) {
             $message = Message::whereKey($message->id)->lockForUpdate()->firstOrFail();
             $message->ticket->assertWritable();
@@ -102,6 +102,7 @@ class TranslationController extends Controller
             abort_unless(($sendOriginal ? $data['body'] : $data['translation']['original_body']) === ($message->original_body ?? $message->body), 409, 'The reply changed. Reload and translate it again.');
             $translated = $policy->outgoing($message->ticket, $data['body'], $data['translation'] ?? null, $sendOriginal);
             $message->update(['body' => $data['body'], ...$translated, ...app(MailSafety::class)->prepare($message->ticket->mailbox)]);
+            $message->ticket->update(['assignee_id' => array_key_exists('assignee_id', $data) ? $data['assignee_id'] : $request->user()->id]);
             Activity::create(['ticket_id' => $message->ticket_id, 'user_id' => $request->user()->id, 'description' => ($sendOriginal ? 'Chose original language for reply #' : 'Prepared browser translation for reply #').$message->id.'.']);
             if ($message->delivery === 'queued') {
                 if ($message->ticket->status === 'Open') {

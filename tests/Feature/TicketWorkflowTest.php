@@ -19,6 +19,47 @@ class TicketWorkflowTest extends TestCase
 {
     use RefreshDatabase;
 
+    public function test_replies_assign_to_the_replying_agent_by_default(): void
+    {
+        Queue::fake();
+        $agent = User::factory()->create();
+        $other = User::factory()->create();
+        $this->actingAs($agent);
+        foreach ([null, $other->id] as $assignee) {
+            $ticket = Ticket::factory()->create(['assignee_id' => $assignee]);
+            $this->postJson('/api/v1/tickets/'.$ticket->id.'/messages', ['body' => 'I will help with this request.'])
+                ->assertOk()->assertJsonPath('data.assignee_id', $agent->id)->assertJsonPath('data.status', 'Pending');
+            $this->assertSame($agent->id, $ticket->fresh()->assignee_id);
+        }
+    }
+
+    public function test_reply_assignment_honors_manual_choices_and_rejects_missing_agents(): void
+    {
+        Queue::fake();
+        $agent = User::factory()->create();
+        $other = User::factory()->create();
+        $this->actingAs($agent);
+        $ticket = Ticket::factory()->create(['assignee_id' => $agent->id]);
+        foreach ([$other->id, null] as $assignee) {
+            $this->postJson('/api/v1/tickets/'.$ticket->id.'/messages', ['body' => 'A reply with a chosen owner.', 'assignee_id' => $assignee])
+                ->assertOk()->assertJsonPath('data.assignee_id', $assignee);
+            $this->assertSame($assignee, $ticket->fresh()->assignee_id);
+        }
+        $this->postJson('/api/v1/tickets/'.$ticket->id.'/messages', ['body' => 'Invalid assignment.', 'assignee_id' => 999999])
+            ->assertUnprocessable()->assertJsonValidationErrors('assignee_id');
+        $this->assertDatabaseCount('messages', 2);
+    }
+
+    public function test_private_notes_do_not_reassign_the_ticket(): void
+    {
+        Queue::fake();
+        $agent = User::factory()->create();
+        $other = User::factory()->create();
+        $ticket = Ticket::factory()->create(['assignee_id' => $other->id]);
+        $this->actingAs($agent)->postJson('/api/v1/tickets/'.$ticket->id.'/messages', ['body' => 'Internal update.', 'private' => true, 'assignee_id' => $agent->id])
+            ->assertOk()->assertJsonPath('data.assignee_id', $other->id);
+    }
+
     public function test_customer_replies_default_to_pending_and_honor_an_explicit_status(): void
     {
         Queue::fake();

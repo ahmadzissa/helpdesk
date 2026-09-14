@@ -3,7 +3,7 @@ import { ref, onMounted } from 'vue';
 import { api, state } from '../store';
 import { prepareReply, replyPayload, languageName, validateReplyPreview } from '../translation';
 import Modal from './Modal.vue';
-const props = defineProps({ message: Object, ticket: Object, detectLanguage: Function });
+const props = defineProps({ message: Object, ticket: Object, assigneeId: { type: Number, default: undefined }, detectLanguage: Function });
 const emit = defineEmits(['close', 'saved']);
 const preview = ref(null), busy = ref(false), error = ref(''), showOriginal = ref(false);
 async function translate() {
@@ -29,6 +29,7 @@ async function send(sendOriginal = false) {
     try {
         if (!sendOriginal) validateReplyPreview(preview.value);
         const payload = sendOriginal ? { body: props.message.original_body ?? props.message.body, send_original: true } : { body: preview.value.body, translation: replyPayload(preview.value) };
+        if (props.assigneeId !== undefined) payload.assignee_id = props.assigneeId;
         await api('messages/' + props.message.id + '/prepare-translation', { method: 'POST', body: payload });
         emit('saved');
     } catch (e) { error.value = e.message; } finally { busy.value = false; }

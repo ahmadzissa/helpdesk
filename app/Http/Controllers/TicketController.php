@@ -246,7 +246,7 @@ class TicketController extends Controller
         if (is_string($request->input('translation'))) {
             $request->merge(['translation' => json_decode($request->input('translation'), true) ?? false]);
         }
-        $data = $request->validate(['body' => 'required|string|max:50000', 'private' => 'boolean', 'status' => ['sometimes', Rule::in(Ticket::STATUSES)], 'attachments' => 'nullable|array|max:5', 'attachments.*' => 'file|max:10240', ...app(TranslationPolicy::class)->rules()]);
+        $data = $request->validate(['body' => 'required|string|max:50000', 'private' => 'boolean', 'status' => ['sometimes', Rule::in(Ticket::STATUSES)], 'assignee_id' => 'sometimes|nullable|integer|exists:users,id', 'attachments' => 'nullable|array|max:5', 'attachments.*' => 'file|max:10240', ...app(TranslationPolicy::class)->rules()]);
         $files = [];
         try {
             foreach ($request->file('attachments', []) as $file) {
@@ -261,6 +261,9 @@ class TicketController extends Controller
                     'author_name' => $request->user()->name, 'author_email' => $ticket->mailbox?->email, ...($private ? ['delivery' => null] : app(MailSafety::class)->prepare($ticket->mailbox)), 'attachments' => $files, ...$translation]);
                 app(InlineImages::class)->bind($message, $ticket, $request->user()->id);
                 $status = $data['status'] ?? ($private ? $ticket->status : 'Pending');
+                if (! $private) {
+                    $ticket->assignee_id = array_key_exists('assignee_id', $data) ? $data['assignee_id'] : $request->user()->id;
+                }
                 $ticket->update(['unread' => false, 'status' => $status, 'last_activity_at' => now(), 'resolved_at' => in_array($status, ['Solved', 'Closed']) ? ($ticket->resolved_at ?? now()) : null]);
                 TicketDraft::where('ticket_id', $ticket->id)->where('user_id', $request->user()->id)->delete();
                 Activity::create(['ticket_id' => $ticket->id, 'user_id' => $request->user()->id, 'description' => ($private ? 'Added private note to #' : 'Replied to #').$ticket->id]);

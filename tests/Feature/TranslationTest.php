@@ -249,6 +249,7 @@ class TranslationTest extends TestCase
         $this->postJson('/api/v1/messages/'.$message->id.'/prepare-translation', $this->payload($ticket, 'Original reply'))
             ->assertOk()->assertJsonPath('delivery', 'queued');
         $this->assertSame('Pending', $ticket->fresh()->status);
+        $this->assertSame(auth()->id(), $ticket->fresh()->assignee_id);
         $this->assertDatabaseCount('messages', 1);
         $this->assertSame('Hola, podemos ayudar.', $message->fresh()->body);
         $this->assertTrue(app(TranslationPolicy::class)->ready($message->fresh()));
@@ -268,6 +269,20 @@ class TranslationTest extends TestCase
         (new SendTicketReply($message))->handle();
         $this->assertSame('translation_pending', $message->fresh()->delivery);
         $this->assertDatabaseCount('mail_delivery_attempts', 0);
+    }
+
+    public function test_translation_review_preserves_a_chosen_assignee(): void
+    {
+        $this->enableTranslation();
+        $this->actingAs(User::factory()->create());
+        $chosenAgent = User::factory()->create();
+        $ticket = $this->ticket();
+        foreach ([$chosenAgent->id, null] as $assignee) {
+            $message = app(WorkflowActions::class)->message($ticket, 'Original reply', false, 'Macro');
+            $this->postJson('/api/v1/messages/'.$message->id.'/prepare-translation', [...$this->payload($ticket, 'Original reply'), 'assignee_id' => $assignee])
+                ->assertOk()->assertJsonPath('delivery', 'queued');
+            $this->assertSame($assignee, $ticket->fresh()->assignee_id);
+        }
     }
 
     public function test_html_image_labels_and_titles_remain_visible_after_translation_is_saved(): void

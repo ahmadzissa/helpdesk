@@ -13,7 +13,7 @@ class TrackingController extends Controller
     public function open(string $attempt): Response
     {
         if (DB::table('mail_delivery_attempts')->where('id', $attempt)->exists()) {
-            app(DeliveryTracking::class)->record($attempt, 'opened', 'pixel:'.$attempt, null, 'Remote image loaded; this may be an email proxy.');
+            app(DeliveryTracking::class)->record($attempt, 'opened', 'pixel:'.$attempt, null, 'Email open detected; this may be an email privacy service.');
         }
 
         return response(base64_decode('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7'), 200, [
