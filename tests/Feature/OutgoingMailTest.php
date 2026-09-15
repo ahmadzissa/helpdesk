@@ -66,6 +66,14 @@ class OutgoingMailTest extends TestCase
         $this->assertStringStartsWith('Hello '.$ticket->requester_name.",\n\n**Hello** customer\n\nBest regards,\nAreviews Team\n\nOn ", $sent->getTextBody());
         $this->assertStringContainsString('> Question', $sent->getTextBody());
         $this->assertStringContainsString('<strong>Hello</strong>', $sent->getHtmlBody());
+        $this->assertStringContainsString('bgcolor="#f2f5f8"', $sent->getHtmlBody());
+        $this->assertStringContainsString('src="cid:areviews-logo@relay.brand"', $sent->getHtmlBody());
+        $this->assertStringContainsString('PREVIOUS MESSAGE', $sent->getHtmlBody());
+        $this->assertStringContainsString('Manage email preferences', $sent->getHtmlBody());
+        $logo = $sent->getAttachments()[0];
+        $this->assertSame('areviews-logo@relay.brand', $logo->getContentId());
+        $this->assertSame('inline', $logo->getDisposition());
+        $this->assertSame(hash_file('sha256', public_path('areviews-logo.png')), hash('sha256', base64_decode($logo->bodyToString())));
         $this->assertStringContainsString('original@example.com', $sent->getHeaders()->get('In-Reply-To')->getBodyAsString());
         $this->assertSame('auto-replied', $sent->getHeaders()->get('Auto-Submitted')->getBodyAsString());
         $this->assertSame('sent', $message->fresh()->delivery);
@@ -125,6 +133,10 @@ class OutgoingMailTest extends TestCase
         $this->assertStringNotContainsString('Unrelated customer', $outgoing->text($message));
         $first = Message::factory()->create(['kind' => 'outbound', 'body' => 'First reply']);
         $this->assertSame('Hello '.$first->ticket->requester_name.",\n\nFirst reply\n\nBest regards,\nAreviews Team", $outgoing->text($first));
+        $firstHtml = $outgoing->html($first, new Email);
+        $this->assertStringContainsString('src="cid:areviews-logo@relay.brand"', $firstHtml);
+        $this->assertStringContainsString('First reply', $firstHtml);
+        $this->assertStringNotContainsString('PREVIOUS MESSAGE', $firstHtml);
     }
 
     public function test_greeting_and_signature_are_only_added_to_delivered_content_and_escape_customer_names(): void
@@ -174,7 +186,7 @@ class OutgoingMailTest extends TestCase
         $this->assertStringContainsString('src="https://example.com/photo.png"', $html);
         $this->assertStringNotContainsString('/api/v1/attachments/', $html);
         $this->assertStringNotContainsString('Old history', $html);
-        $this->assertCount(1, $email->getAttachments());
+        $this->assertCount(2, $email->getAttachments());
     }
 
     public function test_only_failed_messages_in_connected_mailboxes_can_be_retried(): void

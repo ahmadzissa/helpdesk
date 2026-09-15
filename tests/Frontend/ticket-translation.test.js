@@ -29,6 +29,33 @@ function mount(google, makeFixture = fixture, detectedLanguage = 'en') {
 }
 const echoGoogle = async (url, options) => ({ ok: true, json: async () => [JSON.parse(options.body)[0][0].map(text => 'ES: ' + text), ['en']] });
 
+test('language detection keeps incoming images and replaces a cached text translation with formatted content', async () => {
+    const message = { id: 7, body: '[image: image.png]\nHola', source_hash: 'source', translation_format: 'html',
+        translation_text: '<p>Hola</p><img src="/api/v1/attachments/7/0/inline" alt="image.png"><img data-email-src="https://example.com/photo.png">',
+        translation: { target_language: 'en', source_hash: 'source', body_format: 'text', body: '[image: image.png]\nHello' } };
+    let saves = 0;
+    const mounted = mount(async (url, options) => {
+        if (url === '/api/v1/messages/7/translation') {
+            saves++;
+            const saved = JSON.parse(options.body);
+            assert.equal(saved.body_format, 'html');
+            assert.match(saved.body, /src="\/api\/v1\/attachments\/7\/0\/inline"/);
+            assert.match(saved.body, /data-email-src="https:\/\/example.com\/photo.png"/);
+            assert.doesNotMatch(saved.body, /\[image:/);
+            return { ok: true, json: async () => ({ translation: saved, customer_language: { language: 'es' }, translation_context: context }) };
+        }
+        return echoGoogle(url, options);
+    }, () => ({ ...fixture(), messages: [structuredClone(message)], language_sample: { ...message }, customer_language: {} }));
+    try {
+        await mounted.translation.detectLanguage();
+        assert.equal(saves, 1);
+        assert.equal(mounted.ticket.value.messages[0].translation.body_format, 'html');
+        mounted.ticket.value.messages[0].translation = { ...message.translation };
+        await mounted.translation.translateMessage(mounted.ticket.value.messages[0]);
+        assert.equal(saves, 2);
+    } finally { mounted.stop(); }
+});
+
 test('disabled tickets skip automatic and manual translation and send without a preview', async () => {
     const mounted = mount(() => assert.fail('Disabled tickets must not translate'), () => ({ ...fixture(), translation_enabled: false }));
     let requests = 0;

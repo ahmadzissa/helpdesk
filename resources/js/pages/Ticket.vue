@@ -6,6 +6,7 @@ import { appUrl } from '../urls';
 import { createTicketRefresher } from '../ticketRefresh';
 import { ticketTimeline } from '../ticketTimeline';
 import EmailMessageBody from '../components/EmailMessageBody.vue';
+import PriorityIcon from '../components/PriorityIcon.vue';
 import { guardDraftNavigation } from '../draftNavigation';
 import { state, api, notify, initials, statusClass, refreshSendingSafety } from '../store';
 import Modal from '../components/Modal.vue';
@@ -57,6 +58,8 @@ async function load() {
     try {
         const data = await api('tickets/' + route.params.id);
         ticket.value = data.ticket; related.value = data.related; activity.value = data.activity;
+        const firstReply = data.ticket.messages.find(message => message.id === Number(route.query.prepare_reply) && message.kind === 'outbound' && message.delivery === 'translation_pending' && !message.attempt_id);
+        if (firstReply) reviewMessage.value = firstReply;
         sendStatus.value = data.draft?.private ? data.ticket.status : 'Pending';
         body.value = data.draft?.body || ''; privateNote.value = data.draft?.private || false;
         if (ticket.value.unread && !ticket.value.merged_into_id) { await api('tickets/' + ticket.value.id, { method: 'PATCH', body: { unread: false } }); state.refresh++; }
@@ -214,7 +217,7 @@ async function saveDetails() {
 <div v-else-if="error" class="surface empty-state"><Icon name="alert" /><h2>Couldn’t open this ticket</h2><p>{{ error }}</p><Link class="secondary-button" :href="$appUrl('/tickets')">Back to inbox</Link></div>
 <main v-else class="ticket-page surface">
     <section class="conversation-column">
-        <header class="ticket-subject-row"><Link class="icon-button" :href="$appUrl('/tickets')" aria-label="Back to inbox"><Icon name="back" /></Link><h1 @dblclick="editDetails" :title="ticket.subject" dir="auto">{{ ticket.subject }}</h1><span class="ticket-number">#{{ ticket.id }}</span>
+        <header class="ticket-subject-row"><Link class="icon-button" :href="$appUrl('/tickets')" aria-label="Back to inbox"><Icon name="back" /></Link><h1 @dblclick="editDetails" :title="ticket.subject" dir="auto"><PriorityIcon :priority="ticket.priority" />{{ ticket.subject }}</h1><span class="ticket-number">#{{ ticket.id }}</span>
         <button v-if="!ticket.merged_into_id" class="icon-button ticket-actions-toggle" @click="quickActionsOpen = !quickActionsOpen" aria-label="Ticket actions" :aria-expanded="quickActionsOpen" aria-controls="ticket-quick-actions"><Icon name="more" /></button>
         <div v-if="!ticket.merged_into_id" id="ticket-quick-actions" class="ticket-quickbar" :class="{ 'is-open': quickActionsOpen }" @click="quickActionsOpen = false" @keydown.esc="quickActionsOpen = false"><div>
             <Link :href="$appUrl('/automations')" class="icon-button" title="Automations" aria-label="Automations"><Icon name="bolt" /></Link>

@@ -11,6 +11,7 @@ use App\Models\Team;
 use App\Models\Ticket;
 use App\Models\TicketDraft;
 use App\Models\User;
+use App\Models\WorkspaceSetting;
 use App\Services\MailboxConnections;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\UploadedFile;
@@ -113,13 +114,46 @@ class HelpdeskTest extends TestCase
         $this->admin();
         $this->postJson('/api/v1/tickets', ['subject' => 'Missing requester'])->assertUnprocessable();
         $response = $this->postJson('/api/v1/tickets', ['subject' => 'Please help', 'requester_email' => 'customer@example.com', 'body' => 'My request']);
-        $response->assertCreated()->assertJsonPath('data.messages.0.body', 'My request');
+        $response->assertCreated()->assertJsonPath('data.messages.0.body', 'My request')->assertJsonPath('data.messages.0.kind', 'outbound')->assertJsonPath('data.messages.0.delivery', 'saved')->assertJsonPath('data.status', 'Pending');
         $id = $response->json('data.id');
         $this->patchJson('/api/v1/tickets/'.$id, ['status' => 'Solved', 'folder' => 'trash'])->assertOk();
         $this->assertNotNull(Ticket::find($id)->resolved_at);
         $this->patchJson('/api/v1/tickets/'.$id, ['status' => 'Open', 'folder' => 'inbox'])->assertOk();
         $this->assertNull(Ticket::find($id)->resolved_at);
         $this->assertDatabaseHas('tickets', ['id' => $id, 'folder' => 'inbox', 'status' => 'Open']);
+    }
+
+    public function test_new_agent_ticket_queues_its_first_message_and_records_the_agent_as_sender(): void
+    {
+        Queue::fake();
+        $agent = $this->admin();
+        $mailbox = Mailbox::factory()->create(['sending_enabled' => true, 'smtp_host' => 'smtp.example.com']);
+        $response = $this->postJson('/api/v1/tickets', ['subject' => 'A new conversation', 'requester_email' => 'customer@example.com', 'body' => 'Your first message.', 'mailbox_id' => $mailbox->id]);
+        $response->assertCreated()->assertJsonPath('data.status', 'Pending')->assertJsonPath('data.assignee_id', $agent->id)
+            ->assertJsonPath('data.unread', false)->assertJsonPath('data.messages.0.kind', 'outbound')
+            ->assertJsonPath('data.messages.0.author_name', $agent->name)->assertJsonPath('data.messages.0.author_email', $mailbox->email)
+            ->assertJsonPath('data.messages.0.delivery', 'queued');
+        $id = $response->json('data.messages.0.id');
+        Queue::assertPushed(SendTicketReply::class, fn ($job) => $job->message->id === $id);
+        $this->assertDatabaseMissing('messages', ['ticket_id' => $response->json('data.id'), 'kind' => 'inbound']);
+    }
+
+    public function test_new_ticket_preserves_translation_and_sending_pause_requirements(): void
+    {
+        Queue::fake();
+        $this->admin();
+        $mailbox = Mailbox::factory()->create(['sending_enabled' => true, 'smtp_host' => 'smtp.example.com']);
+        WorkspaceSetting::updateOrCreate(['key' => 'translation'], ['value' => ['outgoing' => true]]);
+        $data = ['subject' => 'First contact', 'requester_email' => 'customer@example.com', 'body' => 'Your first message.', 'mailbox_id' => $mailbox->id, 'customer_language' => 'ar'];
+        $this->postJson('/api/v1/tickets', $data)->assertCreated()->assertJsonPath('data.messages.0.delivery', 'translation_pending')
+            ->assertJsonPath('data.customer_language.language', 'ar')->assertJsonPath('data.customer_language.manual', 1);
+        $this->assertDatabaseHas('customer_languages', ['email' => 'customer@example.com', 'language' => 'ar', 'source_message_id' => null]);
+        Queue::assertNotPushed(SendTicketReply::class);
+
+        WorkspaceSetting::find('translation')->update(['value' => ['outgoing' => false]]);
+        DB::table('mail_safety')->where('id', 1)->update(['paused_at' => now()]);
+        $this->postJson('/api/v1/tickets', $data)->assertCreated()->assertJsonPath('data.messages.0.delivery', 'held');
+        Queue::assertNotPushed(SendTicketReply::class);
     }
 
     public function test_bulk_is_validated_before_any_ticket_is_changed(): void

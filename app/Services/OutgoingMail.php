@@ -38,24 +38,28 @@ class OutgoingMail
             $content = '<p dir="auto" style="margin:0 0 24px;font-size:20px;font-weight:700">'.e($greeting).'</p>'
                 .$content.'<p dir="auto" style="margin:24px 0 0">'.e($closing).'<br>'.e($team).'</p>';
         }
-        $html = '<div dir="auto">'.$content.'</div>';
         $previous = $this->previousMessage($message);
-        if ($previous) {
-            $html .= '<div class="gmail_quote" style="margin-top:24px"><p dir="auto">'.e($this->attribution($previous)).'</p>'
-                .'<blockquote type="cite" dir="auto" style="margin:0;padding:0 16px;border-left:2px solid #ddd">'
-                .$this->messageHtml($previous, $email).'</blockquote></div>';
-        }
         $attempt = DB::table('mail_delivery_attempts')->where('id', $message->attempt_id)->first();
-        if ($attempt && (WorkspaceSetting::find('mail_policy')?->value['track_opens'] ?? true)) {
-            $html .= '<img src="'.e($this->link('mail.open', $attempt->id)).'" width="1" height="1" alt="" />';
-        }
+        $preferencesUrl = null;
         if ($attempt) {
-            $url = $this->link('mail.optout', $attempt->id);
-            $html .= '<p style="font-size:12px;color:#777"><a href="'.e($url).'">Manage email preferences</a> for '.e($attempt->recipient).'.</p>';
-            $email->getHeaders()->addTextHeader('List-Unsubscribe', '<'.$url.'>');
+            $preferencesUrl = $this->link('mail.optout', $attempt->id);
+            $email->getHeaders()->addTextHeader('List-Unsubscribe', '<'.$preferencesUrl.'>');
         }
+        $logo = DataPart::fromPath(public_path('areviews-logo.png'), 'areviews-logo.png', 'image/png')->asInline();
+        $logo->setContentId('areviews-logo@relay.brand');
+        $email->addPart($logo);
 
-        return $html;
+        return view('outgoing-reply', [
+            'content' => $content,
+            'sender' => $message->ticket->mailbox?->name ?: 'Areviews Support Team',
+            'ticketNumber' => $message->ticket_id,
+            'previousContent' => $previous ? $this->messageHtml($previous, $email) : null,
+            'previousAttribution' => $previous ? $this->attribution($previous) : null,
+            'preferencesUrl' => $preferencesUrl,
+            'recipient' => $attempt?->recipient,
+            'trackingUrl' => $attempt && (WorkspaceSetting::find('mail_policy')?->value['track_opens'] ?? true)
+                ? $this->link('mail.open', $attempt->id) : null,
+        ])->render();
     }
 
     public function previousMessage(Message $message): ?Message

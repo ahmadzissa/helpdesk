@@ -114,6 +114,31 @@ class EmailRenderingTest extends TestCase
         $this->getJson('/api/v1/tickets/'.$message->ticket_id)->assertOk()->assertJsonPath('ticket.messages.0.translation.body_html', $html);
     }
 
+    public function test_language_detection_preserves_images_and_discards_cached_plain_text_image_translations(): void
+    {
+        $message = $this->htmlMessage('<p>Hola</p><img src="cid:photo@example.com" alt="image.png"><img src="https://example.com/photo.png"><div class="gmail_quote"><img src="https://example.com/old.png"></div>');
+        $message->update(['body' => "[image: image.png]\nHola", 'author_email' => $message->ticket->requester_email,
+            'attachments' => [['name' => 'image.png', 'mime' => 'image/png', 'path' => 'ticket-attachments/photo', 'size' => 68, 'content_id' => 'photo@example.com']]]);
+        DB::table('message_translations')->insert(['message_id' => $message->id, 'target_language' => 'en', 'source_language' => 'es',
+            'body' => "[image: image.png]\nHello", 'body_format' => 'text', 'source_hash' => hash('sha256', $message->body)]);
+        $this->actingAs(User::factory()->create());
+        $response = $this->getJson('/api/v1/tickets/'.$message->ticket_id)->assertOk();
+        $sample = $response->json('ticket.language_sample');
+        $this->assertSame('html', $sample['translation_format']);
+        $this->assertSame($response->json('ticket.messages.0.translation_text'), $sample['translation_text']);
+        $this->assertStringContainsString('/api/v1/attachments/'.$message->id.'/0/inline', $sample['translation_text']);
+        $this->assertStringContainsString('data-email-src="https://example.com/photo.png"', $sample['translation_text']);
+        $this->assertStringNotContainsString('[image:', $sample['translation_text']);
+        $this->assertStringNotContainsString('old.png', $sample['translation_text']);
+        $this->assertNull($response->json('ticket.messages.0.translation'));
+        $translated = str_replace('Hola', 'Hello', $sample['translation_text']);
+        $saved = $this->putJson('/api/v1/messages/'.$message->id.'/translation', ['body' => $translated, 'body_format' => 'html',
+            'source_language' => 'es', 'target_language' => 'en', 'source_hash' => $sample['source_hash']])->assertOk();
+        $this->assertSame(2, substr_count($saved->json('translation.body_html'), '<img '));
+        $this->getJson('/api/v1/tickets/'.$message->ticket_id)->assertJsonPath('ticket.messages.0.translation.body_html', $saved->json('translation.body_html'));
+        $this->assertSame("[image: image.png]\nHola", $message->fresh()->body);
+    }
+
     public function test_tracking_pixel_labels_are_removed_from_translation_input_and_existing_cached_translations(): void
     {
         $label = '6adf0fac-7622-4b2b-80f3-58180fa8e4b0';

@@ -33,7 +33,8 @@ export function useTicketTranslation(ticket, body, privateNote) {
         const controller = incomingController;
         const work = (async () => {
         const target = settings.value.target;
-        if (!force && message.translation?.target_language === target && message.translation.source_hash === message.source_hash) return;
+        if (!force && message.translation?.target_language === target && message.translation.source_hash === message.source_hash
+            && message.translation.body_format === (message.translation_format || 'text')) return;
         pending[message.id] = true; delete errors[message.id];
         try {
             const currentId = ticket.value.id, { key } = await config();

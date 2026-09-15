@@ -144,13 +144,26 @@ class TicketController extends Controller
 
     public function store(Request $request, AutomationEngine $engine): JsonResponse
     {
-        $data = $request->validate(array_merge($this->rules(), ['subject' => 'required|string|max:255', 'requester_email' => 'required|email|max:255', 'body' => 'required|string|max:50000']));
+        $data = $request->validate(array_merge($this->rules(), ['subject' => 'required|string|max:255', 'requester_email' => 'required|email|max:255', 'body' => 'required|string|max:50000',
+            'customer_language' => ['nullable', 'string', TranslationPolicy::LANGUAGE_RULE]]));
         $ticket = DB::transaction(function () use ($data, $request, $engine) {
             app(TicketCustomFields::class)->validateValues($data['custom_fields'] ?? []);
-            $ticket = Ticket::create([...collect($data)->except('body')->all(), 'last_activity_at' => now(), 'tags' => $data['tags'] ?? []]);
-            $ticket->messages()->create(['body' => $data['body'], 'kind' => 'inbound', 'author_name' => $ticket->requester_name, 'author_email' => $ticket->requester_email]);
+            $ticket = Ticket::create([...collect($data)->except(['body', 'customer_language'])->all(), 'status' => $data['status'] ?? 'Pending',
+                'assignee_id' => array_key_exists('assignee_id', $data) ? $data['assignee_id'] : $request->user()->id,
+                'unread' => false, 'last_activity_at' => now(), 'tags' => $data['tags'] ?? []]);
+            if (! empty($data['customer_language'])) {
+                DB::table('customer_languages')->updateOrInsert(['email' => $ticket->requester_email],
+                    ['language' => $data['customer_language'], 'manual' => true, 'source_message_id' => null, 'created_at' => now(), 'updated_at' => now()]);
+            }
+            $message = $ticket->messages()->create(['body' => $data['body'], 'kind' => 'outbound', 'user_id' => $request->user()->id,
+                'author_name' => $request->user()->name, 'author_email' => $ticket->mailbox?->email,
+                ...app(MailSafety::class)->prepare($ticket->mailbox)]);
+            app(TranslationPolicy::class)->holdIfNeeded($message);
             Activity::create(['ticket_id' => $ticket->id, 'user_id' => $request->user()->id, 'description' => 'Created ticket #'.$ticket->id]);
             $engine->run($ticket, 'ticket.created');
+            if ($message->delivery === 'queued') {
+                SendTicketReply::dispatch($message)->afterCommit();
+            }
 
             return $ticket;
         });

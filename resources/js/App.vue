@@ -5,6 +5,7 @@ import { useNavigation } from './useNavigation';
 import { appUrl } from './urls';
 import { state, syncPage, api, notify, initials, refreshSidebar, refreshSendingSafety } from './store';
 import Modal from './components/Modal.vue';
+import LanguagePicker from './components/LanguagePicker.vue';
 import { createLocalMailPoller } from './localMailPolling';
 const route = useNavigation(), inertiaPage = usePage();
 watch(() => inertiaPage.props, props => syncPage(props), { immediate: true, flush: 'sync' });
@@ -19,7 +20,7 @@ const mailPoller = createLocalMailPoller({
 });
 function pollLocalMail() { mailPoller.poll(); }
 watch(() => Boolean(state.user && state.workspace.local_mail_polling), pollLocalMail);
-const emptyTicket = () => ({ subject: '', requester_name: '', requester_email: '', body: '', priority: 'Normal', source: 'Email', mailbox_id: state.workspace.mailboxes[0]?.id || null, team_id: state.workspace.mailboxes[0]?.team_id || null });
+const emptyTicket = () => ({ subject: '', requester_name: '', requester_email: '', body: '', customer_language: null, priority: 'Normal', source: 'Email', mailbox_id: state.workspace.mailboxes.find(box => box.sending_enabled)?.id || null, team_id: state.workspace.mailboxes.find(box => box.sending_enabled)?.team_id || null });
 const form = reactive(emptyTicket());
 function newTicket() { Object.assign(form, emptyTicket()); creating.value = true; createError.value = ''; }
 provide('newTicket', newTicket);
@@ -41,7 +42,11 @@ async function createTicket() {
     saving.value = true;
     try {
         const result = await api('tickets', { method: 'POST', body: form });
-        creating.value = false; state.refresh++; notify('Ticket created'); router.visit(appUrl('/tickets/' + result.data.id));
+        const message = result.data.messages[0];
+        const needsTranslation = message?.delivery === 'translation_pending';
+        creating.value = false; state.refresh++;
+        notify(needsTranslation ? 'Ticket created. Prepare the first reply for delivery.' : message?.delivery === 'queued' ? 'Ticket created. Message queued for delivery.' : message?.delivery === 'held' ? 'Ticket created. Message held because sending is paused.' : 'Ticket created. Message saved; connect a sending mailbox to deliver it.');
+        router.visit(appUrl('/tickets/' + result.data.id) + (needsTranslation ? '?prepare_reply=' + message.id : ''));
     } catch (e) { createError.value = e.message; } finally { saving.value = false; }
 }
 function logout() { router.post(appUrl('/logout')); }
@@ -95,9 +100,10 @@ onBeforeUnmount(() => { document.removeEventListener('keydown', shortcut); docum
 <Modal v-if="creating" title="New ticket" wide @close="!saving && (creating = false)">
     <form @submit.prevent="createTicket" class="form-stack"><p class="form-description">Start a conversation. We’ll keep everything together here.</p><p v-if="createError" class="error-message" role="alert">{{ createError }}</p>
         <div class="form-grid"><label>Requester email<input v-model="form.requester_email" type="email" required placeholder="customer@company.com" /></label><label>Name <span class="muted">(optional)</span><input v-model="form.requester_name" placeholder="Customer name" /></label></div>
-        <label>Subject<input v-model="form.subject" required maxlength="255" placeholder="What can we help with?" /></label><label>Message<textarea v-model="form.body" required rows="6" placeholder="Add the details of the request…" /></label>
+        <label>Subject<input v-model="form.subject" required maxlength="255" placeholder="What can we help with?" /></label><label>Message to the customer<textarea v-model="form.body" required rows="6" placeholder="Write your first message to the customer…" /></label>
+        <label v-if="state.workspace.translation?.outgoing">Customer language <span class="muted">(for translation)</span><LanguagePicker v-model="form.customer_language" label="New customer language" /><small class="muted">Choose a language for a new customer. Leave empty to use their previously saved language.</small></label>
         <div class="form-grid"><label>Mailbox<select v-model="form.mailbox_id" @change="form.team_id = state.workspace.mailboxes.find(b => b.id === form.mailbox_id)?.team_id || null"><option :value="null">No mailbox</option><option v-for="box in state.workspace.mailboxes" :value="box.id" :key="box.id">{{ box.name }} · {{ box.email }}</option></select></label><label>Priority<select v-model="form.priority"><option v-for="p in ['Low', 'Normal', 'High', 'Urgent']" :key="p">{{ p }}</option></select></label></div>
-        <div class="form-actions"><button type="button" class="secondary-button" @click="creating = false" :disabled="saving">Cancel</button><button class="primary-button" :disabled="saving"><Icon name="plus" />{{ saving ? 'Creating…' : 'Create ticket' }}</button></div>
+        <div class="form-actions"><button type="button" class="secondary-button" @click="creating = false" :disabled="saving">Cancel</button><button class="primary-button" :disabled="saving"><Icon name="plus" />{{ saving ? 'Creating…' : state.workspace.translation?.outgoing ? 'Create & prepare reply' : state.workspace.mailboxes.some(box => box.id === form.mailbox_id && box.sending_enabled) ? 'Create & send' : 'Create ticket' }}</button></div>
     </form>
 </Modal>
 </template>
