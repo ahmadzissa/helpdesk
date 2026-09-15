@@ -13,6 +13,8 @@ use App\Models\Team;
 use App\Models\Ticket;
 use App\Models\User;
 use App\Models\WorkspaceSetting;
+use App\Services\CannedImages;
+use App\Services\InlineImages;
 use App\Services\MailboxConnections;
 use App\Services\MailSafety;
 use App\Services\TicketDeletion;
@@ -80,9 +82,37 @@ class WorkspaceController extends Controller
         }
         $class = $this->model($type);
         $model = $id ? $class::findOrFail($id) : new $class;
+        if ($type === 'replies' && is_string($request->input('shortcut'))) {
+            $request->merge(['shortcut' => implode(', ', CannedReply::shortcuts($request->input('shortcut')))]);
+        }
         $rules = match ($type) {
             'views' => ['name' => 'required|string|max:80', 'tag' => 'nullable|string|max:60', ...$this->filterRules('filters')],
-            'replies' => ['title' => 'required|string|max:120', 'shortcut' => ['required', 'regex:/^#[a-zA-Z0-9_-]+$/', 'max:40', Rule::unique('canned_replies')->ignore($id)], 'category' => 'required|string|max:60', 'body' => 'required|string|max:20000'],
+            'replies' => ['title' => 'required|string|max:120', 'shortcut' => ['required', 'string', 'max:255', function (string $attribute, mixed $value, \Closure $fail) use ($id): void {
+                if (! is_string($value)) {
+                    return;
+                }
+                $shortcuts = CannedReply::shortcuts($value);
+                foreach ($shortcuts as $shortcut) {
+                    if (! preg_match('/^#[\pL\pN_-]+(?: [\pL\pN_-]+)*$/u', $shortcut) || mb_strlen($shortcut) > 40) {
+                        $fail('Use comma-separated shortcuts with letters, numbers, spaces, hyphens or underscores (up to 40 characters each).');
+
+                        return;
+                    }
+                }
+                $normalized = array_map('mb_strtolower', $shortcuts);
+                if (count(array_unique($normalized)) !== count($normalized)) {
+                    $fail('Each shortcut must be different.');
+
+                    return;
+                }
+                foreach (CannedReply::when($id, fn ($query) => $query->whereKeyNot($id))->pluck('shortcut') as $existing) {
+                    if (array_intersect($normalized, array_map('mb_strtolower', CannedReply::shortcuts($existing)))) {
+                        $fail('One of these shortcuts is already used by another canned response.');
+
+                        return;
+                    }
+                }
+            }], 'category' => 'required|string|max:60', 'body' => 'required|string|max:20000'],
             'teams' => ['name' => ['required', 'string', 'max:80', Rule::unique('teams')->ignore($id)], 'description' => 'nullable|string|max:255'],
             'agents' => ['name' => 'required|string|max:100', 'email' => ['required', 'email', 'max:255', Rule::unique('users')->ignore($id)], 'role' => 'required|in:admin,agent', 'password' => [$id ? 'sometimes' : 'required', 'required', Password::min(12)]],
             'mailboxes' => [
@@ -109,6 +139,10 @@ class WorkspaceController extends Controller
             ],
         };
         $data = $request->validate($rules);
+        if ($type === 'replies') {
+            abort_if(app(InlineImages::class)->ids($data['body']) !== [], 422, 'Upload images in this canned response so they can be reused across tickets.');
+            app(CannedImages::class)->images($data['body']);
+        }
         if ($type === 'automations' && ! array_filter($data['actions'], fn ($v) => $v !== null && $v !== '')) {
             return response()->json(['message' => 'Choose at least one action.'], 422);
         }

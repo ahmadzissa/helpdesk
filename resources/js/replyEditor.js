@@ -1,10 +1,10 @@
 import { appUrl } from './urls.js';
 
-const imagePattern = /!\[([^\]\r\n]*)\]\((\/api\/v1\/inline-images\/[a-f0-9-]{36})\)/gi;
+const imagePattern = /!\[([^\]\r\n]*)\]\((\/api\/v1\/(?:inline-images|canned-images)\/[a-f0-9-]{36})\)/gi;
 
 export function normalizeImagePaste(text) {
-    const normalized = text.replace(/\\(!\[[^\]\r\n]*\]\(\/api\/v1\/inline-images\/[a-f0-9-]{36}\))/gi, '$1');
-    return /!\[[^\]\r\n]*\]\(\/api\/v1\/inline-images\/[a-f0-9-]{36}\)/i.test(normalized)
+    const normalized = text.replace(/\\(!\[[^\]\r\n]*\]\(\/api\/v1\/(?:inline-images|canned-images)\/[a-f0-9-]{36}\))/gi, '$1');
+    return /!\[[^\]\r\n]*\]\(\/api\/v1\/(?:inline-images|canned-images)\/[a-f0-9-]{36}\)/i.test(normalized)
         ? normalized.replace(/&#(?:x20|32);/gi, ' ')
         : text;
 }

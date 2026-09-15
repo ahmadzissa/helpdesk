@@ -7,7 +7,7 @@ const previous = document.activeElement;
 function keydown(event) {
     if (event.key === 'Escape') { emit('close'); }
     if (event.key === 'Tab') {
-        const elements = [...panel.value.querySelectorAll('button, input, select, textarea, a[href], [tabindex="0"]')].filter(el => !el.disabled && el.offsetParent !== null);
+        const elements = [...panel.value.querySelectorAll('button, input, select, textarea, a[href], [tabindex="0"], [contenteditable="true"]')].filter(el => !el.disabled && el.offsetParent !== null);
         const first = elements[0], last = elements.at(-1);
         if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
         if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }

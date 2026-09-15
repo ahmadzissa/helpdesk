@@ -3,6 +3,9 @@ import { computed, ref, reactive, watch } from 'vue';
 import { useNavigation } from '../useNavigation';
 import { state, api, bootstrap, notify, palettes, applyTheme, initials, relativeTime } from '../store';
 import Modal from '../components/Modal.vue';
+import CannedResponseEditor from '../components/CannedResponseEditor.vue';
+import { cannedShortcuts } from '../cannedReplies';
+import { replyEditorHtml } from '../replyEditor';
 import SendingSafety from '../components/SendingSafety.vue';
 import MailPolicySettings from '../components/MailPolicySettings.vue';
 import ApiSettings from '../components/ApiSettings.vue';
@@ -14,6 +17,7 @@ const page = computed(() => route.params.page || 'settings'), section = computed
 const admin = computed(() => state.user.role === 'admin');
 const search = ref(''), modal = ref(null), saving = ref(false), formError = ref(''), deleting = ref(null), form = reactive({});
 const { testing: testingConnections, results: connectionResults, token: connectionToken, error: connectionError, required: connectionTestRequired, passed: connectionsPassed, canSave: canSaveAccount, test: testConnections } = useMailboxConnections(form, modal);
+const uploadingCannedImage = ref(false);
 const days = ref(30), reports = ref(null), reportError = ref(''), activities = ref([]), activityPage = ref(1), activityLastPage = ref(1);
 const general = reactive({ name: state.workspace.settings.general?.name || 'Relay', timezone: state.workspace.settings.general?.timezone || 'Asia/Riyadh', registration_enabled: state.workspace.registration_enabled === true, show_email_images: state.workspace.settings.general?.show_email_images !== false });
 const profile = reactive({ name: state.user.name, email: state.user.email, current_password: '', password: '', password_confirmation: '' });
@@ -38,6 +42,7 @@ function open(type, record = null) {
     formError.value = '';
 }
 async function save() {
+    if (uploadingCannedImage.value || saving.value) return;
     if (modal.value.type === 'mailboxes' && !canSaveAccount.value) {
         formError.value = 'Test both SMTP and IMAP successfully before saving this account.';
         return;
@@ -166,9 +171,9 @@ function exportReport() {
         </template>
         <template v-else-if="page === 'replies'">
             <div class="collection-toolbar"><label class="collection-search"><Icon name="search" /><input v-model="search" placeholder="Search responses…" aria-label="Search responses" /></label><span class="muted">{{ filteredReplies.length }} responses</span></div>
-            <div class="reply-grid"><article v-for="reply in filteredReplies" :key="reply.id" class="reply-card"><div><span class="category-badge">{{ reply.category }}</span><details class="row-menu"><summary class="icon-button" :aria-label="'Options for ' + reply.title"><Icon name="more" /></summary><div class="dropdown-menu"><button @click="open('replies', reply)">Edit response</button><button @click="deleting = { type: 'replies', id: reply.id, name: reply.title }">Remove response</button></div></details></div><button class="reply-title" @click="open('replies', reply)">{{ reply.title }}</button><p>{{ reply.body }}</p><footer><kbd>{{ reply.shortcut }}</kbd><button class="text-button" @click="open('replies', reply)">Edit response<Icon name="right" :size="14" /></button></footer></article></div>
+            <div class="reply-grid"><article v-for="reply in filteredReplies" :key="reply.id" class="reply-card"><div><span class="category-badge">{{ reply.category }}</span><details class="row-menu"><summary class="icon-button" :aria-label="'Options for ' + reply.title"><Icon name="more" /></summary><div class="dropdown-menu"><button @click="open('replies', reply)">Edit response</button><button @click="deleting = { type: 'replies', id: reply.id, name: reply.title }">Remove response</button></div></details></div><button class="reply-title" @click="open('replies', reply)">{{ reply.title }}</button><p class="canned-body-preview" v-html="replyEditorHtml(reply.body)" /><footer><span class="shortcut-badges"><kbd v-for="shortcut in cannedShortcuts(reply.shortcut)" :key="shortcut">{{ shortcut }}</kbd></span><button class="text-button" @click="open('replies', reply)">Edit response<Icon name="right" :size="14" /></button></footer></article></div>
             <div v-if="!filteredReplies.length" class="empty-state"><Icon name="message" :size="30" /><h2>No responses yet</h2><p>Create a reusable response or try another search.</p><button class="primary-button" @click="open('replies')">New response</button></div>
-            <div class="info-banner"><Icon name="bolt" /><p>Type a response shortcut in the reply editor, then press Tab. Variables such as <code v-pre>{{name}}</code> are filled in for the current conversation.</p></div>
+            <div class="info-banner"><Icon name="bolt" /><p>To use a canned response while responding to a ticket, enter # and the shortcut, then press Tab. Use a comma to add more than one shortcut to a canned response. Variables such as <code v-pre>{{name}}</code> are filled in for the current conversation.</p></div>
         </template>
         <template v-else-if="page === 'reports'">
             <p v-if="!reports && !reportError" class="muted">Gathering your reports…</p><div v-if="reportError" class="error-message" role="alert">{{ reportError }}<button @click="loadReports">Try again</button></div>
@@ -190,7 +195,7 @@ function exportReport() {
     </div>
 </main>
 
-<Modal v-if="modal" :title="modal.title" wide @close="!saving && (modal = null)">
+<Modal v-if="modal" :title="modal.title" wide @close="!saving && !uploadingCannedImage && (modal = null)">
 <form class="form-stack" @submit.prevent="save">
     <div v-if="formError" class="error-message" role="alert">{{ formError }}</div>
     <template v-if="modal.type === 'views'">
@@ -202,9 +207,9 @@ function exportReport() {
     </template>
     <template v-else-if="modal.type === 'replies'">
         <label>Response title<input v-model="form.title" required placeholder="A friendly follow-up" maxlength="120" /></label>
-        <div class="form-grid"><label>Shortcut<input v-model="form.shortcut" required pattern="#[a-zA-Z0-9_-]+" placeholder="#followup" /></label><label>Category<input v-model="form.category" required placeholder="General" /></label></div>
-        <label>Message<textarea v-model="form.body" required rows="9" placeholder="Hi {{name}},&#10;&#10;Thanks for reaching out…" /></label>
-        <div class="variable-options"><span>Insert a variable</span><button v-for="variable in ['name', 'email', 'ticket_id', 'subject', 'agent']" :key="variable" type="button" @click="form.body += '{{' + variable + '}}'">{{ ['{', '{', variable, '}', '}'].join('') }}</button></div>
+        <div class="form-grid"><label>Shortcuts<input v-model="form.shortcut" required maxlength="255" placeholder="#export reviews, #CSV file" aria-describedby="canned-shortcut-help" /></label><label>Category<input v-model="form.category" required placeholder="General" /></label></div>
+        <p id="canned-shortcut-help" class="form-description">To use a canned response while responding to a ticket, enter # and the shortcut, then press Tab. Use a comma to add more than one shortcut. The # prefix is optional when saving.</p>
+        <CannedResponseEditor v-model="form.body" :disabled="saving" @uploading="uploadingCannedImage = $event" />
     </template>
     <template v-else-if="modal.type === 'teams'"><label>Group name<input v-model="form.name" required placeholder="Customer success" /></label><label>Description<textarea v-model="form.description" rows="3" placeholder="What does this group take care of?" /></label></template>
     <template v-else-if="modal.type === 'agents'"><label>Full name<input v-model="form.name" required /></label><label>Email address<input v-model="form.email" type="email" required /></label><label>Role<select v-model="form.role"><option value="agent">Agent — tickets, replies, and views</option><option value="admin">Admin — full workspace access</option></select></label><label>{{ modal.id ? 'New password (leave blank to keep current)' : 'Initial password' }}<input v-model="form.password" type="password" minlength="12" :required="!modal.id" autocomplete="new-password" /></label><p class="form-description">Share the account details with your teammate directly. They can change their password from their profile.</p></template>
@@ -229,7 +234,7 @@ function exportReport() {
         <p v-if="connectionsPassed" class="muted" role="status">Both connections passed. You can save now. Changing connection settings requires another test.</p>
         <p v-else-if="connectionTestRequired && !testingConnections" class="muted">Save is available after both connections pass. Results are valid for 10 minutes.</p>
     </section>
-    <div class="form-actions"><button type="button" class="secondary-button" @click="modal = null" :disabled="saving">Cancel</button><button class="primary-button" :disabled="saving || (modal.type === 'mailboxes' && !canSaveAccount)">{{ saving ? 'Saving…' : modal.type === 'mailboxes' && !modal.id ? 'Add account' : 'Save changes' }}</button></div>
+    <div class="form-actions"><button type="button" class="secondary-button" @click="modal = null" :disabled="saving || uploadingCannedImage">Cancel</button><button class="primary-button" :disabled="saving || uploadingCannedImage || (modal.type === 'mailboxes' && !canSaveAccount)">{{ saving ? 'Saving…' : modal.type === 'mailboxes' && !modal.id ? 'Add account' : 'Save changes' }}</button></div>
 </form>
 </Modal>
 <Modal v-if="deleting" :title="deleting.type === 'mailboxes' ? 'Remove email account?' : 'Remove this item?'" @close="!saving && (deleting = null)">

@@ -72,6 +72,7 @@ class WorkflowActions
 
     public function message(Ticket $ticket, string $body, bool $private, string $label, ?int $userId = null): Message
     {
+        app(CannedImages::class)->images($body);
         $message = $ticket->messages()->create([
             'body' => AutomationEngine::expand($body, $ticket, $userId ? (User::find($userId)?->name ?? 'The team') : 'The team'),
             'kind' => $private ? 'note' : 'outbound', 'user_id' => $userId,

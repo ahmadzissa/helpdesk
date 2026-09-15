@@ -17,6 +17,7 @@ class InlineImages
 
     public function bind(Message $message, Ticket $ticket, int $userId): void
     {
+        app(CannedImages::class)->images($message->body);
         $ids = $this->ids($message->body);
         abort_if(count($ids) > 10, 422, 'Use up to 10 inline images per message.');
         foreach ($ids as $id) {

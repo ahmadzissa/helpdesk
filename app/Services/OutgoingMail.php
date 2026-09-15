@@ -127,6 +127,15 @@ class OutgoingMail
     private function messageHtml(Message $message, Email $email): string
     {
         $html = app(EmailContent::class)->render($message);
+        foreach (app(CannedImages::class)->images($html) as $image) {
+            $cid = $image->id.'@relay.canned';
+            if (! collect($email->getAttachments())->contains(fn (DataPart $part): bool => $part->hasContentId() && $part->getContentId() === $cid)) {
+                $part = DataPart::fromPath(Storage::disk('local')->path($image->path), $image->name, $image->mime)->asInline();
+                $part->setContentId($cid);
+                $email->addPart($part);
+            }
+            $html = str_replace('/api/v1/canned-images/'.$image->id, 'cid:'.$cid, $html);
+        }
         foreach (DB::table('inline_images')->where('message_id', $message->id)->get() as $image) {
             $cid = $image->id.'@relay.inline';
             $part = DataPart::fromPath(Storage::disk('local')->path($image->path), $image->name, $image->mime)->asInline();

@@ -111,7 +111,7 @@ class TranslationPolicy
 
     private function assertProtectedContent(string $original, string $translated): void
     {
-        $pattern = '~https?://[^\s<>"\x27)]+|/api/v1/inline-images/[a-f0-9-]{36}|[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}~iu';
+        $pattern = '~https?://[^\s<>"\x27)]+|/api/v1/(?:inline-images|canned-images)/[a-f0-9-]{36}|[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}~iu';
         preg_match_all($pattern, $original, $before);
         preg_match_all($pattern, $translated, $after);
         sort($before[0]);

@@ -194,7 +194,7 @@ class TicketWorkflowTest extends TestCase
         $sent = $mailer->getSymfonyTransport()->messages()->first()->getOriginalMessage();
         $this->assertStringContainsString('cid:'.$image['id'].'@relay.inline', $sent->getHtmlBody());
         $this->assertStringNotContainsString('/api/v1/inline-images/', $sent->getHtmlBody());
-        $this->assertCount(1, $sent->getAttachments());
+        $this->assertCount(1, array_filter($sent->getAttachments(), fn ($part) => $part->getContentId() === $image['id'].'@relay.inline'));
         $this->postJson('/api/v1/tickets/'.$ticket->id.'/messages', ['body' => $image['markdown']])->assertUnprocessable();
         $otherTicket = Ticket::factory()->create();
         $this->postJson('/api/v1/tickets/'.$otherTicket->id.'/messages', ['body' => $image['markdown']])->assertUnprocessable();

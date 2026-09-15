@@ -3,7 +3,7 @@ import { ref, watch, onMounted, onBeforeUnmount } from 'vue';
 import { normalizeImagePaste, replyEditorHtml, replyEditorText } from '../replyEditor';
 
 const props = defineProps({ modelValue: { type: String, default: '' }, disabled: Boolean, placeholder: String, expanded: Boolean });
-const emit = defineEmits(['update:modelValue', 'image']);
+const emit = defineEmits(['update:modelValue', 'image', 'keydown', 'selection']);
 const element = ref();
 let selection = { start: 0, end: 0 };
 
@@ -15,6 +15,7 @@ function rememberSelection() {
     prefix.setEnd(range.startContainer, range.startOffset);
     const start = replyEditorText(prefix.cloneContents()).length;
     selection = { start, end: start + replyEditorText(range.cloneContents()).length };
+    emit('selection', { ...selection });
 }
 
 function setSelectionRange(start, end = start) {
@@ -87,6 +88,8 @@ function drop(event) {
 }
 
 function keydown(event) {
+    emit('keydown', event);
+    if (event.defaultPrevented) return;
     if (event.key === 'Enter' && !event.ctrlKey && !event.metaKey && !event.isComposing) {
         event.preventDefault(); insert('\n');
     }

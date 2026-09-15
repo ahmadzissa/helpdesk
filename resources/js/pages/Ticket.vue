@@ -7,6 +7,9 @@ import { createTicketRefresher } from '../ticketRefresh';
 import { ticketTimeline } from '../ticketTimeline';
 import EmailMessageBody from '../components/EmailMessageBody.vue';
 import ReplyEditor from '../components/ReplyEditor.vue';
+import ReplyFormattingToolbar from '../components/ReplyFormattingToolbar.vue';
+import { cannedShortcuts, matchesCannedShortcut, cannedShortcutTrigger, filterCannedReplies } from '../cannedReplies';
+import { replyEditorHtml } from '../replyEditor';
 import PriorityIcon from '../components/PriorityIcon.vue';
 import { guardDraftNavigation } from '../draftNavigation';
 import { state, api, notify, initials, statusClass, refreshSendingSafety } from '../store';
@@ -50,6 +53,18 @@ async function previewReply() { translationRequested.value = true; await showRep
 async function reviewTranslation(message) { reviewMessage.value = message; }
 async function reviewedTranslation() { reviewMessage.value = null; await refreshTicket(); notify('Reply prepared for delivery'); }
 const canned = computed(() => state.workspace.replies.filter(r => (r.title + r.shortcut + r.body).toLowerCase().includes(replySearch.value.toLowerCase())));
+const editorSelection = ref({ start: 0, end: 0 }), editorFocused = ref(false), suggestionIndex = ref(0), dismissedShortcut = ref('');
+const shortcutTrigger = computed(() => editorSelection.value.start === editorSelection.value.end ? cannedShortcutTrigger(body.value, editorSelection.value.start) : null);
+const shortcutKey = computed(() => shortcutTrigger.value ? JSON.stringify(shortcutTrigger.value) : '');
+const suggestedReplies = computed(() => shortcutTrigger.value ? filterCannedReplies(state.workspace.replies, shortcutTrigger.value.query) : []);
+const showSuggestions = computed(() => editorFocused.value && !sending.value && shortcutTrigger.value && dismissedShortcut.value !== shortcutKey.value);
+watch(shortcutKey, () => { suggestionIndex.value = 0; if (!shortcutKey.value) dismissedShortcut.value = ''; });
+function chooseSuggestion(reply) {
+    const trigger = shortcutTrigger.value;
+    if (!trigger) return;
+    insertReply(reply, trigger);
+    dismissedShortcut.value = shortcutKey.value;
+}
 let draftTimer, deliveryTimer, draftPromise = Promise.resolve(), loaded = false, skipNextDraft = false;
 let draftRevision = 0, savedDraftRevision = 0, ticketMutations = 0;
 const hasUnsavedDraft = () => loaded && !ticket.value?.merged_into_id && draftRevision !== savedDraftRevision;
@@ -183,16 +198,33 @@ async function insertLink() {
         linkDialog.value = false; await nextTick(); editor.value?.focus(); editor.value?.setSelectionRange(start + markdown.length, start + markdown.length);
     } catch (error) { linkError.value = error.message; }
 }
-function insertReply(reply) {
+function insertReply(reply, range = null) {
     let text = reply.body;
     const vars = { name: ticket.value.requester_name || ticket.value.requester_email, email: ticket.value.requester_email, ticket_id: ticket.value.id, subject: ticket.value.subject, agent: state.user.name };
     Object.entries(vars).forEach(([key, value]) => { text = text.replaceAll('{{' + key + '}}', value); });
-    if (/^#[\w-]+$/.test(body.value.trim())) body.value = '';
+    if (range) {
+        editor.value?.setSelectionRange(range.start, range.end);
+    } else if (matchesCannedShortcut(reply, body.value)) {
+        editor.value?.setSelectionRange(0, body.value.length);
+    }
     insert(text); picker.value = false;
 }
 function shortcut(e) {
+    if (e.isComposing) return;
+    if (showSuggestions.value) {
+        if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); dismissedShortcut.value = shortcutKey.value; return; }
+        if (suggestedReplies.value.length && ['ArrowDown', 'ArrowUp'].includes(e.key)) {
+            e.preventDefault();
+            suggestionIndex.value = (suggestionIndex.value + (e.key === 'ArrowDown' ? 1 : -1) + suggestedReplies.value.length) % suggestedReplies.value.length;
+            nextTick(() => document.getElementById('canned-suggestion-' + suggestionIndex.value)?.scrollIntoView({ block: 'nearest' }));
+            return;
+        }
+        if (suggestedReplies.value.length && ['Enter', 'Tab'].includes(e.key) && !e.ctrlKey && !e.metaKey && !e.shiftKey) {
+            e.preventDefault(); chooseSuggestion(suggestedReplies.value[suggestionIndex.value]); return;
+        }
+    }
     if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); send(); }
-    if (e.key === 'Tab') { const reply = state.workspace.replies.find(r => r.shortcut === body.value.trim()); if (reply) { e.preventDefault(); insertReply(reply); } }
+    if (e.key === 'Tab') { const reply = state.workspace.replies.find(r => matchesCannedShortcut(r, body.value)); if (reply) { e.preventDefault(); insertReply(reply); } }
 }
 function addFiles(event) {
     const incoming = Array.from(event.target.files);
@@ -252,12 +284,21 @@ async function saveDetails() {
                 <nav v-if="ticket.merged_tickets?.length" class="merged-ticket-links" aria-label="Merged tickets"><Link v-for="item in ticket.merged_tickets" :key="item.id" :href="$appUrl('/tickets/' + item.id)" :title="'View original messages in ticket #' + item.id"><Icon name="merged" :size="18" /><span dir="auto">{{ item.subject }}</span><small>#{{ item.id }}</small><span class="status-badge" :class="statusClass(item.status)">{{ item.status }}</span></Link></nav>
             </div>
         </div>
-        <div v-if="!ticket.merged_into_id" class="composer-wrap"><div class="ticket-body-content">
-            <form class="composer" :class="{ 'private-composer': privateNote }" @submit.prevent="send">
+        <div v-if="!ticket.merged_into_id" class="composer-wrap" :class="{ 'suggestions-open': showSuggestions }"><div class="ticket-body-content">
+            <form class="composer" :class="{ 'private-composer': privateNote, 'suggestions-open': showSuggestions }" @submit.prevent="send">
                 <div class="composer-recipient"><span><Icon :name="privateNote ? 'lock' : 'mail'" :size="14" />{{ privateNote ? 'Private note for your team' : 'Reply to ' + ticket.requester_email }}</span><span class="draft-state">{{ draftState }}</span><button type="button" class="icon-button" @click="expanded = !expanded" :aria-label="expanded ? 'Collapse reply editor' : 'Expand reply editor'" :aria-expanded="expanded"><Icon :name="expanded ? 'minimize' : 'expand'" :size="15" /></button></div>
-                <ReplyEditor ref="editor" v-model="body" :disabled="sending" :expanded="expanded" :placeholder="privateNote ? 'Leave a note for your team…' : 'Enter message'" @keydown="shortcut" @image="uploadImage" />
+                <div class="reply-editor-area">
+                    <div v-if="showSuggestions" id="canned-suggestions" class="canned-suggestions" role="listbox" aria-label="Matching canned responses" @mousedown.prevent>
+                        <div class="canned-suggestions-heading">Canned responses <small>↑ ↓ to browse · Enter to insert</small></div>
+                        <button v-for="(reply, index) in suggestedReplies" :id="'canned-suggestion-' + index" :key="reply.id" type="button" role="option" :aria-selected="index === suggestionIndex" :class="{ selected: index === suggestionIndex }" @mouseenter="suggestionIndex = index" @click="chooseSuggestion(reply)">
+                            <strong>{{ reply.title }}</strong><span class="shortcut-badges"><kbd v-for="alias in cannedShortcuts(reply.shortcut)" :key="alias">{{ alias }}</kbd></span>
+                        </button>
+                        <p v-if="!suggestedReplies.length" class="canned-suggestions-empty" role="status">No matching canned responses.</p>
+                    </div>
+                    <ReplyEditor ref="editor" v-model="body" :disabled="sending" :expanded="expanded" :placeholder="privateNote ? 'Leave a note for your team…' : 'Enter message'" :aria-expanded="Boolean(showSuggestions)" :aria-controls="showSuggestions ? 'canned-suggestions' : undefined" :aria-activedescendant="showSuggestions && suggestedReplies.length ? 'canned-suggestion-' + suggestionIndex : undefined" aria-autocomplete="list" @focus="editorFocused = true" @blur="editorFocused = false" @selection="editorSelection = $event" @keydown="shortcut" @image="uploadImage" />
+                </div>
                 <div v-if="files.length" class="attached-files"><span v-for="(file, i) in files" :key="i"><Icon name="file" :size="13" />{{ file.name }}<button type="button" @click="files.splice(i, 1)" :aria-label="'Remove ' + file.name"><Icon name="x" :size="13" /></button></span></div>
-                <div v-if="formatVisible" class="format-toolbar" aria-label="Message formatting"><button type="button" @click="format('**')" title="Bold"><b>B</b></button><button type="button" @click="format('_')" title="Italic"><i>I</i></button><button type="button" @click="format('~~')" title="Strikethrough"><s>S</s></button><button type="button" @click="format('&#96;')" title="Code">&lt;/&gt;</button><span class="divider" /><button type="button" @click="insert('\n1. ')" title="Numbered list">1.</button><button type="button" @click="insert('\n• ')" title="Bulleted list">•</button><span class="divider" /><button type="button" @click="openLinkDialog" title="Insert link" aria-label="Insert link" :disabled="sending"><Icon name="link" :size="15" /></button><button type="button" @click="inlineInput.click()" title="Insert image" aria-label="Insert image" :disabled="uploadingImage || sending"><Icon name="image" :size="15" /></button></div>
+                <ReplyFormattingToolbar v-if="formatVisible" :disabled="sending" :uploading-image="uploadingImage" @format="format" @insert="insert" @link="openLinkDialog" @image="inlineInput.click()" />
                 <div class="composer-bottom"><div class="reply-options"><button type="button" class="icon-button" @click="inlineInput.click()" aria-label="Insert inline image" title="Insert inline image" :disabled="uploadingImage"><Icon :name="uploadingImage ? 'loader' : 'image'" /></button><label class="private-toggle"><input type="checkbox" v-model="privateNote" /><span class="toggle-track" />Private</label><span class="divider" /><button type="button" class="icon-button" @click="picker = true" aria-label="Insert canned response" title="Canned responses">#</button><button type="button" class="icon-button" @click="fileInput.click()" aria-label="Attach files" title="Attach files"><Icon name="attachment" /></button><button type="button" class="icon-button" @click="recording = true" aria-label="Screen recording design preview" title="Screen recording preview"><Icon name="video" /></button><button type="button" class="icon-button" @click="formatVisible = !formatVisible" title="Toggle formatting" aria-label="Toggle formatting"><u>A</u></button><button type="button" class="icon-button" @click="insert(state.user.preferences?.signature || '\n\nBest,\n' + state.user.name)" aria-label="Insert signature" title="Insert signature"><Icon name="edit" :size="15" /></button></div>
                 <div class="send-options"><select v-model="sendStatus" aria-label="Status after reply"><option v-for="s in state.workspace.statuses" :key="s">{{ s }}</option></select><button class="primary-button" :disabled="sending || translating || uploadingImage || !body.trim() || (previewReady && (!preview.body.trim() || !preview.subject.trim()))"><Icon :name="privateNote ? 'lock' : 'send'" :size="15" />{{ translating ? 'Translating…' : sending ? 'Saving…' : privateNote ? 'Add note' : requiresPreview && !previewReady ? (automaticSend ? 'Translate & send reply' : 'Translate reply') : state.workspace.sending_safety?.paused ? 'Save for review' : ticket.mailbox?.sending_enabled ? (requiresPreview && !preview?.sameLanguage ? 'Send translated reply' : 'Send reply') : 'Save reply' }}</button></div></div>
                 <input ref="fileInput" type="file" multiple hidden @change="addFiles" />
@@ -303,7 +344,7 @@ async function saveDetails() {
 </main>
 <TranslationReview v-if="reviewMessage" :message="reviewMessage" :ticket="ticket" :assignee-id="replyAssignee" :detect-language="detectLanguage" @close="reviewMessage = null" @saved="reviewedTranslation" />
 <DeliveryDetails v-if="deliveryMessage" :message="deliveryMessage" @close="deliveryMessage = null" />
-<Modal v-if="picker" title="Canned responses" @close="picker = false"><label class="modal-search"><Icon name="search" /><input v-model="replySearch" placeholder="Search responses or shortcuts…" aria-label="Search canned responses" /></label><button v-for="reply in canned" :key="reply.id" class="canned-picker-item" @click="insertReply(reply)"><div><strong>{{ reply.title }}</strong><kbd>{{ reply.shortcut }}</kbd></div><p>{{ reply.body }}</p></button><p v-if="!canned.length" class="muted">No matching responses. Create one in Canned responses.</p></Modal>
+<Modal v-if="picker" title="Canned responses" @close="picker = false"><label class="modal-search"><Icon name="search" /><input v-model="replySearch" placeholder="Search responses or shortcuts…" aria-label="Search canned responses" /></label><button v-for="reply in canned" :key="reply.id" class="canned-picker-item" @click="insertReply(reply)"><div><strong>{{ reply.title }}</strong><span class="shortcut-badges"><kbd v-for="shortcut in cannedShortcuts(reply.shortcut)" :key="shortcut">{{ shortcut }}</kbd></span></div><p class="canned-body-preview" v-html="replyEditorHtml(reply.body)" /></button><p v-if="!canned.length" class="muted">No matching responses. Create one in Canned responses.</p></Modal>
 <Modal v-if="recording" title="Screen recording" @close="recording = false"><div class="recording-preview"><div class="recording-window"><div><i /><i /><i /></div><Icon name="video" :size="42" /><span>Your screen preview</span></div><span class="preview-badge">DESIGN PREVIEW</span><h3>A little context goes a long way.</h3><p>This is a preview of the recording interface. Screen capture, microphone access, and uploading are disabled.</p><button class="primary-button" @click="recording = false">Got it</button></div></Modal>
 <Modal v-if="editing" title="Edit ticket information" wide @close="editing = false"><form class="form-stack" @submit.prevent="saveDetails"><label>Subject<input v-model="editForm.subject" required /></label><div class="form-grid"><label>Requester name<input v-model="editForm.requester_name" /></label><label>Email<input v-model="editForm.requester_email" type="email" required /></label></div><label>Company<input v-model="editForm.company" /></label><label>People in the loop<input v-model="editForm.cc" placeholder="Comma-separated email addresses" /></label><div class="form-actions"><button class="primary-button">Save changes</button></div></form></Modal>
 <Modal v-if="linkDialog" title="Insert link" @close="linkDialog = false"><form class="form-stack" @submit.prevent="insertLink"><label>Text to display<input v-model="linkLabel" placeholder="Link text" /></label><label>Link address<input v-model="linkAddress" type="text" inputmode="url" placeholder="https://example.com" required /></label><p v-if="linkError" class="error-message" role="alert">{{ linkError }}</p><div class="form-actions"><button type="button" class="secondary-button" @click="linkDialog = false">Cancel</button><button type="submit" class="primary-button">Insert link</button></div></form></Modal>

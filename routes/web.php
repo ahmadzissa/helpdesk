@@ -2,6 +2,7 @@
 
 use App\Http\Controllers\ApiAccessController;
 use App\Http\Controllers\AuthController;
+use App\Http\Controllers\CannedImageController;
 use App\Http\Controllers\CustomFieldController;
 use App\Http\Controllers\MailboxConnectionController;
 use App\Http\Controllers\MailboxPollingController;
@@ -51,6 +52,8 @@ Route::prefix('api/v1')->group(function () {
         Route::delete('tickets/{ticket}/follow-ups/{followUp}', [TicketWorkflowController::class, 'cancel'])->whereNumber('followUp');
         Route::post('tickets/{ticket}/inline-images', [TicketWorkflowController::class, 'upload'])->middleware('throttle:30,1');
         Route::get('inline-images/{id}', [TicketWorkflowController::class, 'image'])->whereUuid('id');
+        Route::post('canned-images', [CannedImageController::class, 'store'])->middleware('throttle:30,1');
+        Route::get('canned-images/{id}', [CannedImageController::class, 'show'])->whereUuid('id');
         Route::get('messages/{message}/delivery', [TicketWorkflowController::class, 'delivery']);
         Route::post('logout', [AuthController::class, 'logout']);
         Route::patch('profile', [AuthController::class, 'profile']);

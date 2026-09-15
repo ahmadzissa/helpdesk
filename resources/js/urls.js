@@ -16,5 +16,5 @@ export function appUrl(destination, basePath = applicationBasePath) {
 }
 
 export function messageHtml(html = '') {
-    return html.replace(/src="(\/api\/v1\/(?:inline-images\/[a-f0-9-]{36}|attachments\/\d+\/\d+\/inline))"/gi, (_, path) => `src="${appUrl(path)}"`);
+    return html.replace(/src="(\/api\/v1\/(?:(?:inline-images|canned-images)\/[a-f0-9-]{36}|attachments\/\d+\/\d+\/inline))"/gi, (_, path) => `src="${appUrl(path)}"`);
 }
