@@ -22,8 +22,21 @@ const selectableTickets = computed(() => tickets.value.filter(ticket => !ticket.
 const allSelected = computed(() => selectableTickets.value.length > 0 && selected.value.length === selectableTickets.value.length);
 const someSelected = computed(() => selected.value.length > 0 && !allSelected.value);
 let timer, polling, requestId = 0;
-onMounted(() => { polling = setInterval(() => { if (view.value !== 'archive' && !document.hidden && !selected.value.length && !busy.value && !fetching.value) load(false, true); }, 30000); });
-onBeforeUnmount(() => { clearTimeout(timer); clearInterval(polling); requestId++; });
+function refreshVisibleInbox() {
+    if (!document.hidden && !busy.value && !fetching.value) load(false, true);
+}
+onMounted(() => {
+    polling = setInterval(refreshVisibleInbox, 30000);
+    document.addEventListener('visibilitychange', refreshVisibleInbox);
+    window.addEventListener('focus', refreshVisibleInbox);
+    window.addEventListener('online', refreshVisibleInbox);
+});
+onBeforeUnmount(() => {
+    clearTimeout(timer); clearInterval(polling); requestId++;
+    document.removeEventListener('visibilitychange', refreshVisibleInbox);
+    window.removeEventListener('focus', refreshVisibleInbox);
+    window.removeEventListener('online', refreshVisibleInbox);
+});
 async function load(append = false, quiet = false, includeCounts = true) {
     const id = ++requestId;
     const requestedPage = append ? page.value + 1 : quiet ? page.value : 1;
@@ -33,14 +46,15 @@ async function load(append = false, quiet = false, includeCounts = true) {
     const params = new URLSearchParams({ view: view.value, search: search.value, sort: sort.value, page: String(append ? requestedPage : 1), include_counts: includeCounts && !append ? '1' : '0' });
     if (state.scope !== 'all') { const [key, value] = state.scope.split(':'); params.set(key + '_id', value); }
     try {
-        const data = await api('tickets?' + params);
+        const options = { cache: 'no-store', signal: AbortSignal.timeout(20000) };
+        const data = await api('tickets?' + params, options);
         if (id !== requestId) return;
         const nextPage = Math.min(requestedPage, data.last_page);
         const refreshedTickets = [...data.tickets];
         if (!append && quiet) {
             for (let currentPage = 2; currentPage <= nextPage; currentPage++) {
                 params.set('page', String(currentPage)); params.set('include_counts', '0');
-                const next = await api('tickets?' + params);
+                const next = await api('tickets?' + params, options);
                 if (id !== requestId) return;
                 refreshedTickets.push(...next.tickets);
             }
@@ -115,16 +129,16 @@ function delivery(ticket) {
         <div v-else-if="loading" class="skeleton-list"><div v-for="n in 7" :key="n" class="skeleton-row"><i /><div /><span /></div></div>
         <template v-else>
             <div v-for="ticket in tickets" :key="ticket.id" class="ticket-row" :class="{ unread: ticket.unread, selected: selected.includes(ticket.id) }" role="row">
-                <span class="select-cell" role="cell"><input type="checkbox" v-model="selected" :value="ticket.id" :disabled="Boolean(ticket.merged_into_id)" :aria-label="'Select ticket ' + ticket.id" /><i v-if="ticket.unread" class="unread-dot" /></span>
+                <span class="select-cell" role="cell"><input type="checkbox" v-model="selected" :value="ticket.id" :disabled="Boolean(ticket.merged_into_id)" :aria-label="'Select ticket: ' + ticket.subject" /><i v-if="ticket.unread" class="unread-dot" /></span>
                 <span class="customer-cell" role="cell"><span class="avatar" :class="'avatar-' + ticket.id % 5">{{ initials(ticket.requester_name || ticket.requester_email) }}</span><span class="row-person"><strong :title="ticket.requester_email">{{ ticket.requester_email }}</strong></span></span>
-                <span class="conversation-cell" role="cell"><Link :href="$appUrl('/tickets/' + ticket.id)" :title="ticket.subject"><PriorityIcon :priority="ticket.priority" />{{ ticket.subject }}<span v-if="ticket.merged_into_id || ticket.merged_tickets_count" class="merge-indicator" :title="ticket.merged_into_id ? 'Merged into #' + ticket.merged_into_id : 'Main ticket · ' + ticket.merged_tickets_count + ' merged tickets'" :aria-label="ticket.merged_into_id ? 'Merged into ticket #' + ticket.merged_into_id : 'Main ticket with merged tickets'"><Icon :name="ticket.merged_into_id ? 'merged' : 'merge'" :size="17" /></span></Link><span class="ticket-tags"><span class="ticket-id">#{{ ticket.id }}</span><span v-if="state.user.preferences?.source_indicators !== false && ticket.mailbox" class="source-label"><i :style="{ background: ticket.mailbox.color }" />{{ ticket.mailbox.name }}</span><span v-for="tag in ticket.tags?.slice(0, 2)" class="tag" :key="tag">{{ tag }}</span><span v-if="ticket.tags?.length > 2" class="tag">+{{ ticket.tags.length - 2 }}</span></span></span>
+                <span class="conversation-cell" role="cell"><Link :href="$appUrl('/tickets/' + ticket.id)" :title="ticket.subject"><PriorityIcon :priority="ticket.priority" />{{ ticket.subject }}<span v-if="ticket.merged_into_id || ticket.merged_tickets_count" class="merge-indicator" :title="ticket.merged_into_id ? 'Merged into another ticket' : 'Main ticket · ' + ticket.merged_tickets_count + ' merged tickets'" :aria-label="ticket.merged_into_id ? 'Merged into another ticket' : 'Main ticket with merged tickets'"><Icon :name="ticket.merged_into_id ? 'merged' : 'merge'" :size="17" /></span></Link><span class="ticket-tags"><span v-if="state.user.preferences?.source_indicators !== false && ticket.mailbox" class="source-label"><i :style="{ background: ticket.mailbox.color }" />{{ ticket.mailbox.name }}</span><span v-for="tag in ticket.tags?.slice(0, 2)" class="tag" :key="tag">{{ tag }}</span><span v-if="ticket.tags?.length > 2" class="tag">+{{ ticket.tags.length - 2 }}</span></span></span>
                 <span role="cell" class="status-cell"><span class="status-badge" :class="statusClass(ticket.status)"><Icon :name="['Solved', 'Closed'].includes(ticket.status) ? 'solved' : ['Pending', 'On hold'].includes(ticket.status) ? 'clock' : 'circle'" :size="13" />{{ ticket.status }}</span></span>
                 <span class="assignee-cell" role="cell"><span v-if="ticket.assignee" class="mini-avatar">{{ initials(ticket.assignee.name) }}</span><Icon v-else name="users" :size="15" />{{ ticket.assignee?.name.split(' ')[0] || 'Unassigned' }}</span>
                 <span class="delivery-cell" :class="{ danger: ticket.latest_message?.delivery === 'failed' }" role="cell"><Icon :name="delivery(ticket).icon" :size="15" />{{ delivery(ticket).label }}</span>
                 <span class="time-cell" role="cell" :title="new Date(ticket.last_activity_at).toLocaleString()">{{ relativeTime(ticket.last_activity_at) }}</span>
                 <span role="cell" class="actions-cell"><TicketRowMenu v-if="!ticket.merged_into_id" :ticket="ticket" :disabled="busy" @action="action(ticket, $event)" /></span>
             </div>
-            <div v-if="!tickets.length" class="empty-state"><div class="empty-icon"><Icon :name="search ? 'search' : 'inbox'" :size="30" /></div><h2>{{ search ? 'No matching conversations' : 'A little breathing room.' }}</h2><p>{{ search ? 'Try a different subject, requester, ticket ID, or tag.' : 'There are no tickets in this view. New conversations will appear here.' }}</p><button v-if="search" class="secondary-button" @click="search = ''">Clear search</button><button v-else class="secondary-button" @click="newTicket"><Icon name="plus" />Create a ticket</button></div>
+            <div v-if="!tickets.length" class="empty-state"><div class="empty-icon"><Icon :name="search ? 'search' : 'inbox'" :size="30" /></div><h2>{{ search ? 'No matching conversations' : 'A little breathing room.' }}</h2><p>{{ search ? 'Try a different subject, requester, or tag.' : 'There are no tickets in this view. New conversations will appear here.' }}</p><button v-if="search" class="secondary-button" @click="search = ''">Clear search</button><button v-else class="secondary-button" @click="newTicket"><Icon name="plus" />Create a ticket</button></div>
         </template>
     </div>
     <button v-if="page < lastPage && !loading" class="load-more secondary-button" :disabled="fetching" @click="load(true)">Load more conversations</button>

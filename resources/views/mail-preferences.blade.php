@@ -27,37 +27,37 @@
             <p class="muted">Open “Manage email preferences” in your latest Areviews support email. Copy the complete link if it does not open correctly.</p>
             <p>No email preferences have been changed.</p>
         @else
-            <p class="muted">Choose whether you receive email from Areviews Support.</p>
+            <p class="muted">Choose whether you receive automatic and scheduled email notifications from Areviews Support. Direct replies from our support agents remain enabled.</p>
             <div class="address"><span>Email address</span><strong>{{ $email }}</strong></div>
             @if ($updated ?? false)
-                <div class="notice" role="status">{{ $state === 'stopped' ? 'Email stopped. Your preference has been saved.' : 'Your preference has been saved.' }}</div>
+                <div class="notice" role="status">{{ $state === 'stopped' ? 'Automatic and scheduled emails stopped. Your preference has been saved.' : 'Your preference has been saved.' }}</div>
             @endif
             @if ($error ?? null)
                 <div class="notice error" role="alert">{{ $error }}</div>
             @endif
-            <span class="status {{ $state }}">{{ match ($state) { 'stopped' => 'Support email stopped', 'restricted' => 'Delivery restricted', default => 'Support email enabled' } }}</span>
+            <span class="status {{ $state }}">{{ match ($state) { 'stopped' => 'Email notifications disabled', 'restricted' => 'Delivery restricted', default => 'Email notifications enabled' } }}</span>
             @if ($state === 'restricted')
                 <h2>Contact support to review delivery</h2>
                 <p class="muted">Email to this address has a delivery restriction that cannot be removed here. Reply to a previous support email to ask our team for a review.</p>
             @elseif ($state === 'stopped')
                 <h2>You have opted out</h2>
-                <p class="muted">Future support emails to this address are stopped across all your tickets. You can turn them back on whenever you need.</p>
+                <p class="muted">Automatic and scheduled emails to this address are stopped across all your tickets. Our support agents can still reply to you directly. You can turn notifications back on whenever you need.</p>
                 <form method="post" action="{{ $action }}">
                     @csrf
-                    <button type="submit" name="preference" value="resume">Resume support email</button>
+                    <button type="submit" name="preference" value="resume">Resume email notifications</button>
                 </form>
             @else
-                <h2>Keep receiving support replies</h2>
-                <p class="muted">No action is needed to keep email enabled. Stopping email applies to this address across all your tickets, including replies to your support requests.</p>
+                <h2>Manage automatic email notifications</h2>
+                <p class="muted">No action is needed to keep notifications enabled. Stopping notifications applies to automatic and scheduled emails across all your tickets. Direct agent replies will still be sent.</p>
                 <form method="post" action="{{ $action }}">
                     @csrf
-                    <button type="submit" name="preference" value="stop">Stop email to this address</button>
+                    <button type="submit" name="preference" value="stop">Stop email notifications</button>
                 </form>
             @endif
             <div class="details muted">
                 <h2>What happens next?</h2>
-                <p>You can still send messages to support. If email is stopped, you may not receive our answers. An email already being sent may still arrive.</p>
-                <p>Resuming allows future replies; it does not resend earlier emails. Return to this link to review or change your preference.</p>
+                <p>You can still send messages to support and receive direct replies from our agents. An automatic or scheduled email already being sent may still arrive.</p>
+                <p>Resuming allows future automatic and scheduled emails; it does not resend earlier emails. Return to this link to review or change your preference.</p>
             </div>
         @endif
     </main>

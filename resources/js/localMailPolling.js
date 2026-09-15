@@ -7,7 +7,7 @@ export function createLocalMailPoller({ enabled, visible, request, refreshed, fa
             try {
                 const result = await request();
                 if (disposed || !enabled()) return;
-                if (result.checked) refreshed();
+                if (result.checked || result.queued) refreshed();
                 const error = (result.errors || []).map(item => item.message).join(' ');
                 if (error && error !== lastError) failed(error);
                 lastError = error;

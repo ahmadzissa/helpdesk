@@ -33,7 +33,7 @@ class EmailPreferences
                 return false;
             }
 
-            $detail = $preference === 'stop' ? 'Recipient stopped support email.' : 'Recipient resumed support email.';
+            $detail = $preference === 'stop' ? 'Recipient disabled automatic and scheduled email notifications. Direct agent replies remain enabled.' : 'Recipient resumed automatic and scheduled email notifications.';
             DB::table('delivery_events')->insert([
                 'attempt_id' => $attemptId, 'event_key' => 'preference:'.Str::uuid(),
                 'type' => $preference === 'stop' ? 'opt_out' : 'opt_in', 'recipient' => $email,

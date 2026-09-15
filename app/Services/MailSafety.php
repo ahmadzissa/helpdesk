@@ -68,8 +68,9 @@ class MailSafety
                 return false;
             }
             $recipients = array_values(array_unique(array_map(fn ($email) => mb_strtolower(trim($email)), [$message->ticket->requester_email, ...($message->ticket->cc ?? [])])));
+            $isAgentReply = $message->user_id !== null && $message->rule_name === null;
             foreach ($recipients as $recipient) {
-                if ($reason = app(SenderPolicy::class)->restriction($recipient)) {
+                if ($reason = app(SenderPolicy::class)->restriction($recipient, $isAgentReply)) {
                     $message->update(['delivery' => 'suppressed', 'delivery_error' => $reason]);
 
                     return false;

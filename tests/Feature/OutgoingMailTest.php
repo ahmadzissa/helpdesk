@@ -9,6 +9,7 @@ use App\Models\SavedView;
 use App\Models\Ticket;
 use App\Models\User;
 use App\Services\EmailContent;
+use App\Services\IncomingMail;
 use App\Services\OutgoingMail;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Mail;
@@ -78,6 +79,13 @@ class OutgoingMailTest extends TestCase
         $this->assertSame('auto-replied', $sent->getHeaders()->get('Auto-Submitted')->getBodyAsString());
         $this->assertSame('sent', $message->fresh()->delivery);
         $this->assertNotNull($message->fresh()->external_id);
+        $this->assertSame('Re: '.$ticket->subject, $sent->getSubject());
+        $reply = app(IncomingMail::class)->import($box, [
+            'external_id' => 'customer-follow-up@example.com', 'from_email' => $ticket->requester_email,
+            'subject' => $sent->getSubject(), 'body' => 'Thanks for your help.',
+            'references' => [$message->fresh()->external_id],
+        ]);
+        $this->assertSame($ticket->id, $reply->id);
         (new SendTicketReply($message))->handle();
         $this->assertCount(1, $mailer->getSymfonyTransport()->messages());
     }

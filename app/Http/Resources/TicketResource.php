@@ -19,6 +19,8 @@ class TicketResource extends JsonResource
             $data['mailbox'] = collect($data['mailbox'])->only(['id', 'name', 'email', 'color', 'team_id', 'sending_enabled', 'incoming_enabled'])->all();
         }
         if (isset($data['messages'])) {
+            $recipients = array_map(fn (string $email): string => mb_strtolower(trim($email)), [$this->requester_email, ...($this->cc ?? [])]);
+            $data['email_opt_outs'] = DB::table('recipient_suppressions')->whereIn('email', $recipients)->where('reason', 'opt_out')->pluck('email')->all();
             $data['custom_field_definitions'] = app(TicketCustomFields::class)->settings()['fields'];
             $policy = app(TranslationPolicy::class);
             $target = $policy->settings()['target'];
@@ -56,9 +58,11 @@ class TicketResource extends JsonResource
                     $message['opened_at'] = $attempt?->opened_at;
                     $message['failed_at'] = $attempt?->failed_at;
                 }
+                $inlineIndexes = $content->inlineAttachmentIndexes($model);
+                $attachments = array_filter($message['attachments'] ?? [], fn (array $file, int $index): bool => ! in_array($index, $inlineIndexes, true), ARRAY_FILTER_USE_BOTH);
                 $message['attachments'] = array_map(function (array $file, int $index) use ($message) {
                     return ['name' => $file['name'], 'size' => $file['size'], 'url' => route('attachments.download', ['message' => $message['id'], 'index' => $index])];
-                }, $message['attachments'] ?? [], array_keys($message['attachments'] ?? []));
+                }, $attachments, array_keys($attachments));
 
                 return $message;
             }, $data['messages']);

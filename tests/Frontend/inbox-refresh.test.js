@@ -11,13 +11,16 @@ const compiled = compileScript(descriptor, { id: 'inbox-refresh-test', inlineTem
         const names = bindings.startsWith('{') ? bindings.replace(/\bas\b/g, ':') : `{ default: ${bindings} }`;
         return `const ${names} = modules[${JSON.stringify(source)}];`;
     }).replace('export default', 'return');
-const component = new Function('modules', 'setInterval', 'clearInterval', compiled);
+const component = new Function('modules', 'setInterval', 'clearInterval', 'document', 'window', compiled);
 const flush = async () => { await new Promise(resolve => setImmediate(resolve)); await vue.nextTick(); };
 const ticket = (id, subject = `Conversation ${id}`) => ({ id, subject, requester_email: 'customer@example.test', status: 'Open', last_activity_at: '2026-09-13T00:00:00Z', tags: [] });
 const response = (tickets, lastPage = 1) => ({ tickets, total: tickets.length, last_page: lastPage });
 
 function mount() {
     const requests = [], root = { children: [] };
+    const documentListeners = new Map(), windowListeners = new Map();
+    const document = { hidden: false, addEventListener: (name, callback) => documentListeners.set(name, callback), removeEventListener: name => documentListeners.delete(name) };
+    const window = { addEventListener: (name, callback) => windowListeners.set(name, callback), removeEventListener: name => windowListeners.delete(name) };
     const state = vue.reactive({ scope: 'all', refresh: 0, user: { role: 'admin' }, workspace: { views: [], statuses: [], priorities: [], agents: [], teams: [] } });
     const route = vue.reactive({ query: {} });
     const node = (type, text = '') => ({ type, text, props: {}, children: [], parent: null });
@@ -43,16 +46,17 @@ function mount() {
         },
     });
     const stub = { render: () => null };
-    let poll;
+    let poll, interval;
     const inbox = component({
         vue: { ...vue, vModelText: {}, vModelCheckbox: {}, vModelSelect: {} },
         '../useNavigation': { useNavigation: () => route },
-        '../store': { state, api: path => new Promise((resolve, reject) => requests.push({ path, resolve, reject })), notify() {}, initials: () => 'C', relativeTime: () => 'now', statusClass: value => value.toLowerCase() },
+        '../store': { state, api: (path, options) => new Promise((resolve, reject) => requests.push({ path, options, resolve, reject })), notify() {}, initials: () => 'C', relativeTime: () => 'now', statusClass: value => value.toLowerCase() },
         '../components/Modal.vue': { default: stub },
+        '../components/PriorityIcon.vue': { default: stub },
         '../components/TicketRowMenu.vue': { default: stub },
         '../useBulkTicketDeletion': { useBulkTicketDeletion: () => ({ deleting: vue.ref(null), error: vue.ref(''), open() {}, confirm() {} }) },
         '../useTicketSearch': { useTicketSearch },
-    }, callback => { poll = callback; return 1; }, () => {});
+    }, (callback, delay) => { poll = callback; interval = delay; return 1; }, () => {}, document, window);
     const app = renderer.createApp(inbox);
     app.provide('newTicket', () => {});
     app.component('Icon', stub);
@@ -65,8 +69,60 @@ function mount() {
     const rows = () => find(element => element.props?.class?.split(' ').includes('ticket-row'));
     const skeletons = () => find(element => element.props?.class === 'skeleton-list');
     const loadMore = () => find(element => element.props?.class === 'load-more secondary-button')[0];
-    return { requests, state, route, rows, skeletons, loadMore, find, poll: () => poll(), stop: () => app.unmount() };
+    return { requests, state, route, rows, skeletons, loadMore, find, document, documentListeners, windowListeners, interval, poll: () => poll(), stop: () => app.unmount() };
 }
+
+test('automatic polling adds new tickets even with selected rows and resumes on focus or reconnection', async () => {
+    const mounted = mount();
+    try {
+        mounted.requests[0].resolve(response([ticket(1)]));
+        await flush();
+        assert.equal(mounted.interval, 30000);
+        const row = mounted.rows()[0];
+        mounted.find(element => element.props?.['aria-label'] === 'Select ticket: Conversation 1')[0].props['onUpdate:modelValue']([1]);
+        mounted.poll();
+        assert.equal(mounted.requests.length, 2);
+        assert.equal(mounted.requests[1].options.cache, 'no-store');
+        assert.ok(mounted.requests[1].options.signal instanceof AbortSignal);
+        mounted.poll();
+        assert.equal(mounted.requests.length, 2);
+        mounted.requests[1].resolve(response([ticket(2), ticket(1)]));
+        await flush();
+        assert.equal(mounted.rows().length, 2);
+        assert.equal(mounted.rows()[1], row);
+        assert.match(row.props.class, /selected/);
+        mounted.document.hidden = true;
+        mounted.poll();
+        assert.equal(mounted.requests.length, 2);
+        mounted.document.hidden = false;
+        for (const callback of [mounted.documentListeners.get('visibilitychange'), mounted.windowListeners.get('focus'), mounted.windowListeners.get('online')]) {
+            const count = mounted.requests.length;
+            callback();
+            assert.equal(mounted.requests.length, count + 1);
+            mounted.requests.at(-1).resolve(response([ticket(2), ticket(1)]));
+            await flush();
+        }
+    } finally { mounted.stop(); }
+    assert.equal(mounted.documentListeners.size, 0);
+    assert.equal(mounted.windowListeners.size, 0);
+});
+
+test('a timed-out refresh releases polling so new messages appear on the next check', async () => {
+    const mounted = mount();
+    try {
+        mounted.requests[0].resolve(response([ticket(1)]));
+        await flush();
+        mounted.poll();
+        mounted.requests[1].reject(new DOMException('The request timed out.', 'TimeoutError'));
+        await flush();
+        assert.equal(mounted.rows().length, 1);
+        mounted.poll();
+        mounted.requests[2].resolve(response([ticket(2), ticket(1)]));
+        await flush();
+        assert.equal(mounted.rows().length, 2);
+        assert.equal(mounted.find(element => element.props?.role === 'alert').length, 0);
+    } finally { mounted.stop(); }
+});
 
 test('mail sync keeps mounted rows and selection while new tickets and status changes arrive', async () => {
     const mounted = mount();
@@ -75,7 +131,7 @@ test('mail sync keeps mounted rows and selection while new tickets and status ch
         mounted.requests[0].resolve(response([ticket(1)]));
         await flush();
         const row = mounted.rows()[0];
-        const checkbox = mounted.find(element => element.props?.['aria-label'] === 'Select ticket 1')[0];
+        const checkbox = mounted.find(element => element.props?.['aria-label'] === 'Select ticket: Conversation 1')[0];
         checkbox.props['onUpdate:modelValue']([1]);
         mounted.state.refresh++;
         await flush();

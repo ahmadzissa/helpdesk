@@ -29,6 +29,17 @@ function mount(google, makeFixture = fixture, detectedLanguage = 'en') {
 }
 const echoGoogle = async (url, options) => ({ ok: true, json: async () => [JSON.parse(options.body)[0][0].map(text => 'ES: ' + text), ['en']] });
 
+test('known matching languages skip automatic message translation requests', async () => {
+    const mounted = mount(() => assert.fail('Matching messages must not be translated'), () => ({ ...fixture(), customer_language: { language: 'en', manual: true } }));
+    globalThis.fetch = async () => assert.fail('No translation request is needed');
+    try {
+        await mounted.translation.translateMessage({ id: 7, kind: 'inbound', body: 'Hello' });
+        await mounted.translation.translateMessage({ id: 8, kind: 'outbound', body: 'Thanks', original_body: 'Thanks' });
+        assert.deepEqual({ ...mounted.translation.pending }, {});
+        assert.deepEqual({ ...mounted.translation.errors }, {});
+    } finally { mounted.stop(); }
+});
+
 test('language detection keeps incoming images and replaces a cached text translation with formatted content', async () => {
     const message = { id: 7, body: '[image: image.png]\nHola', source_hash: 'source', translation_format: 'html',
         translation_text: '<p>Hola</p><img src="/api/v1/attachments/7/0/inline" alt="image.png"><img data-email-src="https://example.com/photo.png">',

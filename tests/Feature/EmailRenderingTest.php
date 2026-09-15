@@ -92,13 +92,60 @@ class EmailRenderingTest extends TestCase
         $this->getJson($path)->assertUnauthorized();
         $this->actingAs(User::factory()->create());
         $this->getJson('/api/v1/tickets/'.$message->ticket_id)->assertOk()->assertJsonMissingPath('ticket.messages.0.email_html')
-            ->assertJsonPath('ticket.messages.0.translation_format', 'html');
+            ->assertJsonPath('ticket.messages.0.translation_format', 'html')->assertJsonPath('ticket.messages.0.attachments', []);
         $html = app(EmailContent::class)->render($message);
         $this->assertStringContainsString('src="'.$path.'"', $html);
         $this->assertStringContainsString('<strong>team</strong>', $html);
         $this->get($path)->assertOk()->assertHeader('Content-Type', 'image/png')->assertHeader('X-Content-Type-Options', 'nosniff');
         Storage::disk('local')->put($message->attachments[0]['path'], '<svg onload="evil()"></svg>');
         $this->get($path)->assertNotFound();
+    }
+
+    public function test_embedded_logos_are_not_listed_as_downloads_and_other_attachments_keep_their_original_indexes(): void
+    {
+        Storage::fake('local');
+        $message = $this->htmlMessage('<p>My reply</p><img src="cid:areviews-logo%40relay.brand"><div class="gmail_quote"><img src="cid:quoted-logo@example.com"></div>');
+        $png = base64_decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jYtQAAAAASUVORK5CYII=');
+        $files = [
+            ['name' => 'areviews-logo.png', 'content_id' => 'areviews-logo@relay.brand', 'mime' => 'image/png'],
+            ['name' => 'invoice.txt', 'content_id' => '', 'mime' => 'text/plain'],
+            ['name' => 'areviews-logo.png', 'content_id' => 'actual-upload@example.com', 'mime' => 'image/png'],
+            ['name' => 'quoted-logo.png', 'content_id' => 'quoted-logo@example.com', 'mime' => 'image/png'],
+        ];
+        foreach ($files as $index => &$file) {
+            $file['path'] = 'ticket-attachments/file-'.$index;
+            $content = $file['mime'] === 'image/png' ? $png : 'Invoice contents';
+            $file['size'] = strlen($content);
+            Storage::disk('local')->put($file['path'], $content);
+        }
+        unset($file);
+        $message->update(['attachments' => $files]);
+        $this->actingAs(User::factory()->create());
+        $response = $this->getJson('/api/v1/tickets/'.$message->ticket_id)->assertOk()
+            ->assertJsonCount(2, 'ticket.messages.0.attachments')
+            ->assertJsonPath('ticket.messages.0.attachments.0.name', 'invoice.txt')
+            ->assertJsonPath('ticket.messages.0.attachments.1.name', 'areviews-logo.png')
+            ->assertJsonMissingPath('ticket.messages.0.attachments.0.path');
+        $downloads = $response->json('ticket.messages.0.attachments');
+        $this->assertStringEndsWith('/'.$message->id.'/1', $downloads[0]['url']);
+        $this->assertStringEndsWith('/'.$message->id.'/2', $downloads[1]['url']);
+        $this->assertStringContainsString('/'.$message->id.'/0/inline', $response->json('ticket.messages.0.body_html'));
+        $this->assertStringNotContainsString('/'.$message->id.'/3/inline', $response->json('ticket.messages.0.body_html'));
+        $this->get($downloads[0]['url'])->assertOk()->assertDownload('invoice.txt');
+        $this->get('/api/v1/attachments/'.$message->id.'/0/inline')->assertOk()->assertHeader('Content-Type', 'image/png');
+        $this->assertCount(4, $message->fresh()->attachments);
+        Storage::disk('local')->assertExists(array_column($files, 'path'));
+    }
+
+    public function test_images_without_an_embedded_body_reference_remain_downloadable(): void
+    {
+        $file = ['name' => 'areviews-logo.png', 'mime' => 'image/png', 'size' => 68, 'path' => 'ticket-attachments/logo', 'content_id' => 'areviews-logo@relay.brand'];
+        $this->actingAs(User::factory()->create());
+        foreach (['inbound', 'outbound'] as $kind) {
+            $message = Message::factory()->create(['kind' => $kind, 'body' => 'See attached logo', 'attachments' => [$file]]);
+            $this->getJson('/api/v1/tickets/'.$message->ticket_id)->assertOk()->assertJsonCount(1, 'ticket.messages.0.attachments')
+                ->assertJsonPath('ticket.messages.0.attachments.0.name', 'areviews-logo.png');
+        }
     }
 
     public function test_translations_keep_safe_html_in_both_save_and_ticket_responses(): void

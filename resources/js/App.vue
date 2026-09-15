@@ -12,14 +12,14 @@ watch(() => inertiaPage.props, props => syncPage(props), { immediate: true, flus
 const creating = ref(false), saving = ref(false), createError = ref('');
 let safetyTimer, mailTimer;
 const mailPoller = createLocalMailPoller({
-    enabled: () => Boolean(state.user && state.workspace.local_mail_polling),
+    enabled: () => Boolean(state.user),
     visible: () => !document.hidden,
     request: () => api('mailboxes/poll', { method: 'POST' }),
     refreshed: () => { state.refresh++; },
     failed: message => notify(message, true),
 });
 function pollLocalMail() { mailPoller.poll(); }
-watch(() => Boolean(state.user && state.workspace.local_mail_polling), pollLocalMail);
+watch(() => Boolean(state.user), pollLocalMail);
 const emptyTicket = () => ({ subject: '', requester_name: '', requester_email: '', body: '', customer_language: null, priority: 'Normal', source: 'Email', mailbox_id: state.workspace.mailboxes.find(box => box.sending_enabled)?.id || null, team_id: state.workspace.mailboxes.find(box => box.sending_enabled)?.team_id || null });
 const form = reactive(emptyTicket());
 function newTicket() { Object.assign(form, emptyTicket()); creating.value = true; createError.value = ''; }
@@ -37,7 +37,7 @@ watch(() => state.user?.id, () => {
 watch([() => state.scope, () => state.refresh], () => {
     if (state.user && route.path !== '/tickets') refreshSidebar().catch(e => notify(e.message, true));
 });
-function goView(v) { router.visit(appUrl({ path: '/tickets', query: v === 'all' ? {} : { view: v } })); state.mobileNav = false; }
+function goView(v) { if (v === 'all') pollLocalMail(); router.visit(appUrl({ path: '/tickets', query: v === 'all' ? {} : { view: v } })); state.mobileNav = false; }
 async function createTicket() {
     saving.value = true;
     try {
@@ -55,15 +55,17 @@ function shortcut(e) {
     if (e.key.toLowerCase() === 'n') { e.preventDefault(); newTicket(); }
     if (e.key === '/') { e.preventDefault(); document.querySelector('[data-ticket-search]')?.focus(); }
 }
-watch(() => route.fullPath, () => { state.mobileNav = false; });
+watch(() => route.fullPath, () => { state.mobileNav = false; if (route.path === '/tickets' && view.value === 'all') pollLocalMail(); });
 onMounted(() => {
     document.addEventListener('keydown', shortcut);
     safetyTimer = setInterval(() => refreshSendingSafety().catch(() => {}), 15000);
     pollLocalMail();
-    mailTimer = setInterval(pollLocalMail, 60000);
+    mailTimer = setInterval(pollLocalMail, 30000);
     document.addEventListener('visibilitychange', pollLocalMail);
+    window.addEventListener('focus', pollLocalMail);
+    window.addEventListener('online', pollLocalMail);
 });
-onBeforeUnmount(() => { document.removeEventListener('keydown', shortcut); document.removeEventListener('visibilitychange', pollLocalMail); clearInterval(safetyTimer); clearInterval(mailTimer); mailPoller.dispose(); });
+onBeforeUnmount(() => { document.removeEventListener('keydown', shortcut); document.removeEventListener('visibilitychange', pollLocalMail); window.removeEventListener('focus', pollLocalMail); window.removeEventListener('online', pollLocalMail); clearInterval(safetyTimer); clearInterval(mailTimer); mailPoller.dispose(); });
 </script>
 <template>
 <Head :title="'Relay — ' + (inertiaPage.component === 'Auth' ? 'Your support workspace' : page.charAt(0).toUpperCase() + page.slice(1))" />

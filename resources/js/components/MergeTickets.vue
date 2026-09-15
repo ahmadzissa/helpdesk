@@ -40,13 +40,13 @@ onBeforeUnmount(() => { request++; });
     <div class="merge-tickets">
         <div class="merge-explanation"><Icon name="alert" :size="22" /><p>Merging cannot be undone. Selected tickets will be closed and become read only. Their existing messages stay in those tickets. Future customer replies go to the main ticket. Tags are combined.</p></div>
         <h3>Main ticket</h3>
-        <div class="merge-ticket-row"><span class="status-badge" :class="statusClass(ticket.status)">{{ ticket.status }}</span><Link :href="$appUrl('/tickets/' + ticket.id)" dir="auto">{{ ticket.subject }}</Link><span class="muted">#{{ ticket.id }}</span><time :datetime="ticket.last_activity_at">{{ when(ticket.last_activity_at) }}</time></div>
+        <div class="merge-ticket-row"><span class="status-badge" :class="statusClass(ticket.status)">{{ ticket.status }}</span><Link :href="$appUrl('/tickets/' + ticket.id)" dir="auto">{{ ticket.subject }}</Link><time :datetime="ticket.last_activity_at">{{ when(ticket.last_activity_at) }}</time></div>
         <template v-if="step === 1">
-            <h3>Select tickets to merge into #{{ ticket.id }}</h3>
+            <h3>Select tickets to merge into the main ticket</h3>
             <form class="merge-search" @submit.prevent="page = 1; load()"><input v-model="search" type="search" maxlength="200" placeholder="Search this requester’s tickets…" aria-label="Search tickets to merge" /><button type="submit" class="secondary-button" :disabled="loading">Search</button></form>
             <p v-if="loading" class="muted" role="status">Loading tickets…</p>
             <template v-else-if="results && !error">
-                <label v-for="item in results.data" :key="item.id" class="merge-ticket-row merge-select-row"><input type="checkbox" :checked="selectedIds.includes(item.id)" :disabled="selected.length >= 20 && !selectedIds.includes(item.id)" :aria-label="'Select ticket #' + item.id" @change="select(item, $event.target.checked)" /><span class="status-badge" :class="statusClass(item.status)">{{ item.status }}</span><span class="merge-subject" dir="auto">{{ item.subject }}</span><span class="muted">#{{ item.id }}</span><time :datetime="item.last_activity_at">{{ when(item.last_activity_at) }}</time></label>
+                <label v-for="item in results.data" :key="item.id" class="merge-ticket-row merge-select-row"><input type="checkbox" :checked="selectedIds.includes(item.id)" :disabled="selected.length >= 20 && !selectedIds.includes(item.id)" :aria-label="'Select ticket: ' + item.subject" @change="select(item, $event.target.checked)" /><span class="status-badge" :class="statusClass(item.status)">{{ item.status }}</span><span class="merge-subject" dir="auto">{{ item.subject }}</span><time :datetime="item.last_activity_at">{{ when(item.last_activity_at) }}</time></label>
                 <p v-if="!results.data.length" class="muted">No eligible tickets found. Tickets must belong to this requester and mailbox.</p>
                 <div v-if="results.last_page > 1" class="merge-pagination"><button class="secondary-button" :disabled="page === 1" @click="page--; load()">Previous</button><span>{{ page }} / {{ results.last_page }}</span><button class="secondary-button" :disabled="page === results.last_page" @click="page++; load()">Next</button></div>
             </template>
@@ -54,8 +54,8 @@ onBeforeUnmount(() => { request++; });
         </template>
         <template v-else>
             <h3>Close and merge {{ selected.length }} ticket{{ selected.length === 1 ? '' : 's' }}</h3>
-            <div v-for="item in selected" :key="item.id" class="merge-ticket-row"><Icon name="merged" /><span class="merge-subject" dir="auto">{{ item.subject }}</span><span class="muted">#{{ item.id }}</span></div>
-            <p class="muted">You will reply from ticket #{{ ticket.id }}. Links to these tickets will appear below its conversation. Queued replies in the selected tickets are held, and scheduled follow-ups are cancelled.</p>
+            <div v-for="item in selected" :key="item.id" class="merge-ticket-row"><Icon name="merged" /><span class="merge-subject" dir="auto">{{ item.subject }}</span></div>
+            <p class="muted">You will reply from the main ticket. Links to these tickets will appear below its conversation. Queued replies in the selected tickets are held, and scheduled follow-ups are cancelled.</p>
         </template>
         <p v-if="error" class="error-message" role="alert">{{ error }} <button v-if="step === 1" class="text-button" @click="load">Retry</button></p>
         <footer class="merge-footer"><span>Step {{ step }} of 2</span><div><button class="secondary-button" :disabled="busy" @click="step === 1 ? emit('close') : (step = 1)">{{ step === 1 ? 'Cancel' : 'Back' }}</button><button v-if="step === 1" class="primary-button" :disabled="!selected.length || loading || Boolean(error)" @click="step = 2">Continue</button><button v-else class="primary-button" :disabled="busy" @click="merge">{{ busy ? 'Merging…' : 'Merge tickets' }}</button></div></footer>

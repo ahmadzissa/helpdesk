@@ -106,9 +106,9 @@ class MailPolicyAndApiTest extends TestCase
         $this->assertDatabaseCount('delivery_events', 1);
         $this->get('/mail/open/'.$message->attempt_id)->assertForbidden();
         $url = URL::signedRoute('mail.optout', ['attempt' => $message->attempt_id]);
-        $this->get($url)->assertOk()->assertSee('Stop email to this address');
+        $this->get($url)->assertOk()->assertSee('Stop email notifications');
         $this->assertDatabaseCount('recipient_suppressions', 0);
-        $this->post($url)->assertOk()->assertSee('Email stopped');
+        $this->post($url)->assertOk()->assertSee('Automatic and scheduled emails stopped');
         $this->post($url)->assertOk();
         $this->assertDatabaseCount('recipient_suppressions', 1);
         $this->assertSame('opt_out', DB::table('recipient_suppressions')->first()->reason);

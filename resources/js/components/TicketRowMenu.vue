@@ -72,9 +72,9 @@ watch(() => props.disabled, value => { if (value) close(); });
 </script>
 
 <template>
-    <button ref="trigger" type="button" class="icon-button" :class="{ 'ticket-menu-open': opened }" :aria-label="'Options for ticket ' + ticket.id" aria-haspopup="menu" :aria-expanded="opened" :aria-controls="opened ? menuId : undefined" :aria-disabled="disabled" @click="toggle" @keydown.down.prevent="!opened && toggle()"><Icon name="more" :size="18" /></button>
+    <button ref="trigger" type="button" class="icon-button" :class="{ 'ticket-menu-open': opened }" :aria-label="'Options for ticket: ' + ticket.subject" aria-haspopup="menu" :aria-expanded="opened" :aria-controls="opened ? menuId : undefined" :aria-disabled="disabled" @click="toggle" @keydown.down.prevent="!opened && toggle()"><Icon name="more" :size="18" /></button>
     <Teleport to="body">
-        <div v-if="opened" :id="menuId" ref="menu" class="dropdown-menu ticket-options-menu" :style="position" role="menu" :aria-label="'Options for ticket ' + ticket.id">
+        <div v-if="opened" :id="menuId" ref="menu" class="dropdown-menu ticket-options-menu" :style="position" role="menu" :aria-label="'Options for ticket: ' + ticket.subject">
             <div role="group" aria-label="Priority">
                 <button v-for="priority in priorities" :key="priority" type="button" role="menuitemradio" :aria-checked="ticket.priority === priority" :class="{ current: ticket.priority === priority }" @click="choose({ priority })"><Icon :name="priorityIcon(priority)" :class="'priority-' + priority.toLowerCase()" :size="17" /><span>Set priority to {{ priority }}</span><Icon v-if="ticket.priority === priority" name="check" class="option-check" :size="17" /></button>
             </div>

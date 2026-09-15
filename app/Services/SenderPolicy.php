@@ -25,11 +25,11 @@ class SenderPolicy
         return null;
     }
 
-    public function restriction(string $email): ?string
+    public function restriction(string $email, bool $isAgentReply = false): ?string
     {
         $email = mb_strtolower(trim($email));
         $suppression = DB::table('recipient_suppressions')->where('email', $email)->first();
-        if ($suppression) {
+        if ($suppression && (! $isAgentReply || $suppression->reason !== 'opt_out')) {
             return $email.' is suppressed ('.str_replace('_', ' ', $suppression->reason).').';
         }
 

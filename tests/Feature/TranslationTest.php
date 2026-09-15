@@ -283,7 +283,7 @@ class TranslationTest extends TestCase
         (new SendTicketReply($message))->handle();
         $sent = $mailer->getSymfonyTransport()->messages()->first()->getOriginalMessage();
         $this->assertStringStartsWith('Hello '.$ticket->requester_name.",\n\nOriginal reply\n\nBest regards,\nAreviews Team\n\nOn ", $sent->getTextBody());
-        $this->assertSame('Re: '.$ticket->subject.' [#'.$ticket->id.']', $sent->getSubject());
+        $this->assertSame('Re: '.$ticket->subject, $sent->getSubject());
         Http::assertNothingSent();
     }
 
@@ -436,7 +436,7 @@ class TranslationTest extends TestCase
         (new SendTicketReply($message))->handle();
         $sent = $mailer->getSymfonyTransport()->messages()->first()->getOriginalMessage();
         $this->assertSame('Hola '.$ticket->requester_name.",\n\nHola, podemos ayudar.\n\nSaludos cordiales,\nEl equipo de Areviews", $sent->getTextBody());
-        $this->assertSame('Re: Necesito ayuda [#'.$ticket->id.']', $sent->getSubject());
+        $this->assertSame('Re: Necesito ayuda', $sent->getSubject());
         $this->assertSame('Hello, we can help.', $message->fresh()->original_body);
         Http::assertNothingSent();
     }

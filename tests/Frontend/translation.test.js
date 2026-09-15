@@ -1,11 +1,27 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createTranslator, createLanguageDetector, normalizeLanguage, prepareReply, previewMatches, replyPayload, validateReplyPreview } from '../../resources/js/translation.js';
+import { createTranslator, createLanguageDetector, normalizeLanguage, prepareReply, previewMatches, replyPayload, validateReplyPreview, messageNeedsTranslation } from '../../resources/js/translation.js';
 
 const key = 'synthetic-test-browser-key';
 const ok = value => ({ ok: true, json: async () => value });
 const primary = (text, language = 'es') => ok([Array.isArray(text) ? text : [text], [language]]);
 const requestText = options => JSON.parse(options.body)[0][0];
+
+test('matching message and agent languages hide translation controls, including existing same-language translations', () => {
+    assert.equal(messageNeedsTranslation({ kind: 'inbound' }, 'en', 'en'), false);
+    assert.equal(messageNeedsTranslation({ kind: 'outbound', original_body: 'Hello' }, 'en', 'en'), false);
+    assert.equal(messageNeedsTranslation({ kind: 'inbound', source_hash: 'current', translation: { source_hash: 'current', source_language: 'en', target_language: 'en' } }, 'en', 'en'), false);
+    assert.equal(messageNeedsTranslation({ kind: 'inbound' }, 'ar', 'ar'), false);
+    assert.equal(messageNeedsTranslation({ kind: 'note' }, 'es', 'en'), false);
+});
+
+test('different or unknown message languages retain translation controls and stale detection is ignored', () => {
+    assert.equal(messageNeedsTranslation({ kind: 'inbound' }, 'es', 'en'), true);
+    assert.equal(messageNeedsTranslation({ kind: 'inbound' }, null, 'en'), true);
+    assert.equal(messageNeedsTranslation({ kind: 'inbound', source_hash: 'current', translation: { source_hash: 'current', source_language: 'es' } }, 'en', 'en'), true);
+    assert.equal(messageNeedsTranslation({ kind: 'inbound', source_hash: 'current', translation: { source_hash: 'old', source_language: 'es' } }, 'en', 'en'), false);
+    assert.equal(messageNeedsTranslation({ kind: 'outbound', translation_context: { target: 'es' } }, 'en', 'en'), true);
+});
 
 for (const [language, body] of [['en', 'Hello, we can help.\n\nThanks!'], ['ar', 'مرحباً، يمكننا مساعدتك.\n\nشكراً لك!']]) {
     test(`a reply already in ${language} keeps its exact original without requesting translation`, async () => {

@@ -19,6 +19,13 @@ export function normalizeLanguage(value) {
     if (typeof value !== 'string' || !/^[a-z]{2,3}(-[A-Za-z0-9]{2,8}){0,2}$/.test(value)) return null;
     return ({ iw: 'he', tl: 'fil' })[value] || value;
 }
+export function messageNeedsTranslation(message, customerLanguage, agentLanguage) {
+    if (message.kind === 'note') return false;
+    const savedSource = message.translation?.source_hash === message.source_hash ? message.translation?.source_language : null;
+    const source = normalizeLanguage(savedSource || (message.kind === 'outbound' ? message.translation_context?.target : null) || customerLanguage);
+    const target = normalizeLanguage(agentLanguage);
+    return !source || !target || source.toLowerCase() !== target.toLowerCase();
+}
 export function decodeEntities(value) {
     // Decode entity tokens individually so provider-supplied markup is never parsed as a document.
     return value.replace(/&(?:#x[0-9a-f]+|#\d+|[a-z][a-z0-9]+);/gi, entity => {

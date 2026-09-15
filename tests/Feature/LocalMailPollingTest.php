@@ -39,14 +39,14 @@ class LocalMailPollingTest extends TestCase
         $this->assertDatabaseCount('jobs', 0);
         $this->assertDatabaseCount('messages', 1);
         $this->postJson('/api/v1/mailboxes/poll')->assertOk()->assertJsonPath('checked', 0);
-        $this->travel(61)->seconds();
+        $this->travel(30)->seconds();
         $this->postJson('/api/v1/mailboxes/poll')->assertOk()->assertJsonPath('checked', 1);
         $this->assertDatabaseCount('messages', 1);
         $this->assertDatabaseCount('mail_import_receipts', 1);
         $this->assertSame('idle', $mailbox->fresh()->sync_status);
     }
 
-    public function test_polling_is_authenticated_and_is_only_enabled_for_local_installations(): void
+    public function test_polling_is_authenticated_and_production_queues_checks_without_blocking_the_page(): void
     {
         $this->mock(ImapInbox::class)->shouldNotReceive('receive');
         Mailbox::factory()->create(['incoming_enabled' => true]);
@@ -55,7 +55,10 @@ class LocalMailPollingTest extends TestCase
         $this->getJson('/api/v1/workspace')->assertOk()->assertJsonPath('local_mail_polling', true);
         $this->app['env'] = 'production';
         $this->getJson('/api/v1/workspace')->assertOk()->assertJsonPath('local_mail_polling', false);
-        $this->postJson('/api/v1/mailboxes/poll')->assertNotFound();
+        $this->postJson('/api/v1/mailboxes/poll')->assertOk()->assertJsonPath('checked', 0)->assertJsonPath('queued', 1);
+        $this->assertDatabaseHas('jobs', ['queue' => 'incoming']);
+        $this->postJson('/api/v1/mailboxes/poll')->assertOk()->assertJsonPath('queued', 0);
+        $this->assertDatabaseCount('jobs', 1);
     }
 
     public function test_failed_connections_are_rate_limited_and_do_not_block_other_accounts_or_expose_errors(): void

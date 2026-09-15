@@ -53,7 +53,7 @@ class SendTicketReply implements ShouldQueue
                 }
                 $attempt = DB::table('mail_delivery_attempts')->where('id', $this->message->attempt_id)->firstOrFail();
                 $recipients = json_decode($attempt->recipients, true);
-                $mail->to($attempt->recipient)->from($mailbox->email, $mailbox->name)->replyTo($mailbox->email)->subject('Re: '.app(EmailHeaders::class)->decode($this->message->translated_subject ?? $ticket->subject).' [#'.$ticket->id.']');
+                $mail->to($attempt->recipient)->from($mailbox->email, $mailbox->name)->replyTo($mailbox->email)->subject('Re: '.app(EmailHeaders::class)->decode($this->message->translated_subject ?? $ticket->subject));
                 $cc = array_values(array_diff($recipients, [$attempt->recipient]));
                 if ($cc !== []) {
                     $mail->cc($cc);

@@ -12,18 +12,24 @@ class MailboxPollingController extends Controller
 {
     public function __invoke(): JsonResponse
     {
-        abort_unless(app()->environment('local'), 404);
         $checked = 0;
+        $queued = 0;
         $errors = [];
         $mailboxes = Mailbox::where('incoming_enabled', true)
-            ->where(fn ($query) => $query->whereNull('last_synced_at')->orWhere('last_synced_at', '<=', now()->subMinute()))
+            ->where(fn ($query) => $query->whereNull('last_synced_at')->orWhere('last_synced_at', '<=', now()->subSeconds(30)))
             ->orderBy('last_synced_at')->orderBy('id')->get(['id', 'name']);
 
         foreach ($mailboxes as $mailbox) {
-            if (! Cache::add('local-mail-poll:'.$mailbox->id, true, 60)) {
+            if (! Cache::add('local-mail-poll:'.$mailbox->id, true, 30)) {
                 continue;
             }
             try {
+                if (! app()->environment('local')) {
+                    SyncMailbox::dispatch($mailbox->id);
+                    $queued++;
+
+                    continue;
+                }
                 set_time_limit(930);
                 $startedAt = now()->startOfSecond();
                 SyncMailbox::dispatchSync($mailbox->id);
@@ -36,6 +42,6 @@ class MailboxPollingController extends Controller
             }
         }
 
-        return response()->json(['checked' => $checked, 'errors' => $errors]);
+        return response()->json(['checked' => $checked, 'queued' => $queued, 'errors' => $errors]);
     }
 }

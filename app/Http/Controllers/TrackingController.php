@@ -33,7 +33,7 @@ class TrackingController extends Controller
         if ($request->isMethod('post')) {
             $preference = $request->input('preference', 'stop');
             if (! in_array($preference, ['stop', 'resume'], true)) {
-                $error = 'Choose whether to stop or resume support email.';
+                $error = 'Choose whether to stop or resume automatic and scheduled email notifications.';
             } else {
                 $updated = $preferences->update($attempt, $preference);
             }

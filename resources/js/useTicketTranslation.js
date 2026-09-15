@@ -1,6 +1,6 @@
 import { ref, reactive, computed, watch, onBeforeUnmount } from 'vue';
 import { api, state } from './store.js';
-import { translateText, prepareReply, previewMatches } from './translation.js';
+import { translateText, prepareReply, previewMatches, messageNeedsTranslation } from './translation.js';
 
 export function useTicketTranslation(ticket, body, privateNote) {
     const enabled = computed(() => ticket.value?.translation_enabled !== false);
@@ -29,6 +29,7 @@ export function useTicketTranslation(ticket, body, privateNote) {
     }
     function translateMessage(message, force = false) {
         if (!enabled.value) return Promise.resolve();
+        if (!force && !messageNeedsTranslation(message, ticket.value?.customer_language?.language, settings.value.target)) return Promise.resolve();
         if (messageJobs.has(message.id)) return messageJobs.get(message.id);
         const controller = incomingController;
         const work = (async () => {

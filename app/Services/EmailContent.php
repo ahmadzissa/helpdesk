@@ -63,6 +63,24 @@ class EmailContent
         return app(EmailReplyContent::class)->text($this->withoutTrackingLabels($body, $message));
     }
 
+    /** @return list<int> */
+    public function inlineAttachmentIndexes(Message $message): array
+    {
+        if ($message->kind !== 'inbound' || ! $message->email_html) {
+            return [];
+        }
+        $indexes = [];
+        foreach ($this->document($message->email_html)->getElementsByTagName('img') as $image) {
+            $source = trim($image->getAttribute('src') ?: $image->getAttribute('data-email-src'));
+            $path = $this->imagePath($source, $message);
+            if ($path && preg_match('~/([0-9]+)/inline$~', $path, $match)) {
+                $indexes[] = (int) $match[1];
+            }
+        }
+
+        return array_values(array_unique($indexes));
+    }
+
     public function withoutTrackingLabels(string $body, Message $message): string
     {
         if ($message->kind !== 'inbound' || ! $message->email_html) {

@@ -50,7 +50,7 @@ class Ticket extends Model
 
     public function assertWritable(): void
     {
-        abort_if($this->merged_into_id !== null, 409, 'This ticket was merged into #'.$this->merged_into_id.'. Open the main conversation to make changes.');
+        abort_if($this->merged_into_id !== null, 409, 'This ticket was merged. Open the main conversation to make changes.');
     }
 
     public function mergedTickets(): HasMany

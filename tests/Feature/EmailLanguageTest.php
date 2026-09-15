@@ -58,8 +58,8 @@ class EmailLanguageTest extends TestCase
         Mail::shouldReceive('build')->once()->andReturn($mailer);
         (new SendTicketReply($message))->handle();
         $sent = $mailer->getSymfonyTransport()->messages()->first()->getOriginalMessage();
-        $this->assertSame('Re: '.$subject.' [#'.$ticket->id.']', $sent->getSubject());
-        $this->assertStringStartsWith($subject, $sent->getTextBody());
+        $this->assertSame('Re: '.$subject, $sent->getSubject());
+        $this->assertStringStartsWith('Hello '.$subject.",\n\n".$subject, $sent->getTextBody());
         $this->assertStringContainsString('dir="auto"', $sent->getHtmlBody());
         $this->assertStringContainsString($subject, $sent->getHtmlBody());
         $roundTrip = ImapMessage::fromString($sent->toString());
