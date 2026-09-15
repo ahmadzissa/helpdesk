@@ -18,7 +18,9 @@ class WorkflowController extends Controller
     public function index(): JsonResponse
     {
         return response()->json([
-            'rules' => Automation::all(),
+            'rules' => Automation::query()->select('automations.*')
+                ->selectSub(DB::table('automation_runs')->selectRaw('COUNT(*)')->whereColumn('automation_id', 'automations.id'), 'usage_count')
+                ->withCasts(['usage_count' => 'integer'])->get(),
             'macros' => DB::table('macros')->orderBy('name')->get()->map(fn ($macro) => $this->macro($macro)),
             'runs' => DB::table('automation_runs')->join('automations', 'automations.id', '=', 'automation_runs.automation_id')->join('tickets', 'tickets.id', '=', 'automation_runs.ticket_id')->select('automation_runs.*', 'automations.name', 'tickets.subject')->orderByDesc('automation_runs.id')->limit(50)->get(),
             'follow_ups' => DB::table('follow_ups')->join('tickets', 'tickets.id', '=', 'follow_ups.ticket_id')->select('follow_ups.*', 'tickets.subject')->orderByDesc('follow_ups.id')->limit(50)->get(),

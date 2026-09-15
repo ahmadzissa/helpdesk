@@ -138,7 +138,10 @@ test('reply preview binds to the exact source body, subject, recipient and langu
     assert.equal(previewMatches(preview, 'Hello', 'My order', { ...context, recipient: 'new@example.com' }), false);
     assert.equal(replyPayload(preview).original_body, 'Hello');
     assert.equal(preview.body, 'ES: Hello');
-    await assert.rejects(prepareReply('Hello', 'Subject', { target: null }, { key }, translate), /customer language/);
+    const original = await prepareReply('  Hello\n\n', 'Subject', { target: null }, {}, () => assert.fail('No translation needed'), () => assert.fail('No reply detection needed'));
+    assert.equal(original.sendOriginal, true);
+    assert.equal(original.body, '  Hello\n\n');
+    assert.equal(original.subject, 'Subject');
 });
 
 test('only the reply body is translated and the subject is unchanged', async () => {

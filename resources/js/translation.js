@@ -97,7 +97,7 @@ export function assertProtectedContent(original, translated) {
     if (JSON.stringify(tokens(original)) !== JSON.stringify(tokens(translated))) throw new Error('Translation changed a link, image, email address, or code block. Nothing was sent; try again.');
 }
 export function validateReplyPreview(preview) {
-    if (preview?.sameLanguage) {
+    if (preview?.sameLanguage || preview?.sendOriginal) {
         preview.body = preview.originalBody;
         preview.subject = preview.originalSubject ?? preview.subject;
     }
@@ -220,7 +220,12 @@ export function previewMatches(preview, body, subject, context) {
     return Boolean(preview && preview.originalBody === body && preview.originalSubject === subject && JSON.stringify(preview.context) === JSON.stringify(context));
 }
 export async function prepareReply(body, subject, context, options, translate = translateText, detect = detectReplyLanguage) {
-    if (!context?.target) throw new Error('Detect or select the customer language before translating your reply.');
+    if (!context?.target || options.customerLanguageUnavailable) {
+        options.signal?.throwIfAborted();
+        const preview = { originalBody: body, originalSubject: subject, body, subject, sendOriginal: true, context: JSON.parse(JSON.stringify(context)) };
+        validateReplyPreview(preview);
+        return preview;
+    }
     let source, detectionUnavailable = false;
     try { source = await detect(body, options); }
     catch (error) {

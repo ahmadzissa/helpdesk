@@ -55,7 +55,7 @@ class TranslationTest extends TestCase
         $this->assertSame($body, $message->body);
         $this->assertNull($message->translated_subject);
         $this->assertTrue(app(TranslationPolicy::class)->ready($message));
-        $this->postJson('/api/v1/tickets/'.$other->id.'/messages', ['body' => $body])->assertUnprocessable();
+        $this->postJson('/api/v1/tickets/'.$other->id.'/messages', ['body' => $body])->assertOk();
 
         $this->patchJson('/api/v1/tickets/'.$ticket->id, ['translation_enabled' => true])->assertOk();
         $this->assertFalse(app(TranslationPolicy::class)->ready($message->fresh()));
@@ -261,24 +261,17 @@ class TranslationTest extends TestCase
         Http::assertNothingSent();
     }
 
-    public function test_original_language_reply_requires_translation_to_be_disabled(): void
+    public function test_unknown_customer_language_sends_the_original_even_when_translation_is_required(): void
     {
         $this->enableTranslation();
         $this->actingAs(User::factory()->create());
         $ticket = $this->ticket();
         DB::table('customer_languages')->delete();
         Message::factory()->create(['ticket_id' => $ticket->id, 'kind' => 'inbound', 'author_email' => $ticket->requester_email]);
-        $this->postJson('/api/v1/tickets/'.$ticket->id.'/messages', ['body' => 'Original reply', 'send_original' => false])->assertUnprocessable();
-        $this->postJson('/api/v1/tickets/'.$ticket->id.'/messages', ['body' => 'Original reply', 'send_original' => true])->assertUnprocessable();
-        $this->assertSame(0, $ticket->messages()->where('kind', 'outbound')->count());
-        Queue::assertNothingPushed();
-        WorkspaceSetting::find('translation')->update(['value' => ['outgoing' => false]]);
         $this->postJson('/api/v1/tickets/'.$ticket->id.'/messages', ['body' => 'Original reply', 'send_original' => true])->assertOk();
         $message = $ticket->messages()->where('kind', 'outbound')->firstOrFail();
         $this->assertTrue($message->translation_context['send_original']);
         $this->assertTrue(app(TranslationPolicy::class)->ready($message));
-        DB::table('customer_languages')->insert(['email' => $ticket->requester_email, 'language' => 'es', 'manual' => false]);
-        $this->assertTrue(app(TranslationPolicy::class)->ready($message->fresh()));
         $mailer = app('mail.manager')->mailer('array');
         Mail::shouldReceive('build')->once()->andReturn($mailer);
         (new SendTicketReply($message))->handle();
@@ -301,6 +294,84 @@ class TranslationTest extends TestCase
         Queue::assertNothingPushed();
         $ticket->update(['requester_email' => 'other@example.com']);
         $this->assertFalse(app(TranslationPolicy::class)->ready($message->fresh()));
+    }
+
+    public function test_pending_reply_with_unknown_language_sends_the_original_and_preserves_attachments(): void
+    {
+        $this->enableTranslation();
+        $this->actingAs(User::factory()->create());
+        $ticket = $this->ticket();
+        DB::table('customer_languages')->delete();
+        $body = "  Agent reply\n\nhttps://example.com\n";
+        $attachments = [['name' => 'receipt.pdf', 'path' => 'attachments/receipt.pdf', 'size' => 12]];
+        $message = Message::factory()->create(['ticket_id' => $ticket->id, 'kind' => 'outbound', 'delivery' => 'translation_pending',
+            'body' => $body, 'original_body' => $body, 'attachments' => $attachments, 'attempt_id' => null]);
+
+        $this->postJson('/api/v1/messages/'.$message->id.'/prepare-translation', ['body' => $body, 'send_original' => true])
+            ->assertOk()->assertJsonPath('delivery', 'queued');
+
+        $message->refresh();
+        $this->assertDatabaseCount('messages', 1);
+        $this->assertSame($body, $message->body);
+        $this->assertSame($body, $message->original_body);
+        $this->assertSame($attachments, $message->attachments);
+        $this->assertNull($message->translated_subject);
+        $this->assertNull($message->delivery_error);
+        $this->assertTrue(app(TranslationPolicy::class)->ready($message));
+        Queue::assertPushed(SendTicketReply::class, 1);
+        Http::assertNothingSent();
+    }
+
+    public function test_unknown_language_fallback_preserves_the_original_and_respects_new_language_and_recipient_changes(): void
+    {
+        $this->enableTranslation();
+        $this->actingAs(User::factory()->create());
+        $ticket = $this->ticket();
+        DB::table('customer_languages')->delete();
+        $body = "  Original text\n\n";
+        $this->postJson('/api/v1/tickets/'.$ticket->id.'/messages', ['body' => $body])->assertOk();
+        $message = $ticket->messages()->firstOrFail();
+        $this->assertSame($body, $message->body);
+        $this->assertTrue(app(TranslationPolicy::class)->ready($message));
+
+        DB::table('customer_languages')->insert(['email' => $ticket->requester_email, 'language' => 'es', 'manual' => true]);
+        $this->assertFalse(app(TranslationPolicy::class)->ready($message->fresh()));
+        DB::table('customer_languages')->delete();
+        $ticket->update(['requester_email' => 'another@example.com']);
+        $this->assertFalse(app(TranslationPolicy::class)->ready($message->fresh()));
+    }
+
+    public function test_stale_customer_language_allows_the_original_after_detection_fails(): void
+    {
+        $this->enableTranslation();
+        $this->actingAs(User::factory()->create());
+        $ticket = $this->ticket();
+        Message::factory()->create(['ticket_id' => $ticket->id, 'kind' => 'inbound', 'author_email' => $ticket->requester_email]);
+
+        $this->postJson('/api/v1/tickets/'.$ticket->id.'/messages', ['body' => 'Agent original', 'send_original' => true])->assertOk();
+
+        $message = $ticket->messages()->where('kind', 'outbound')->firstOrFail();
+        $this->assertSame('Agent original', $message->body);
+        $this->assertTrue(app(TranslationPolicy::class)->ready($message));
+        $this->assertSame('queued', $message->delivery);
+        Queue::assertPushed(SendTicketReply::class, 1);
+    }
+
+    public function test_new_ticket_without_customer_email_text_queues_the_original_without_translation_review(): void
+    {
+        $this->enableTranslation();
+        $this->actingAs(User::factory()->create());
+        $mailbox = Mailbox::factory()->create(['sending_enabled' => true, 'smtp_host' => 'smtp.example.com']);
+
+        $this->postJson('/api/v1/tickets', ['mailbox_id' => $mailbox->id, 'requester_email' => 'new@example.com',
+            'requester_name' => 'Customer', 'subject' => 'Hello', 'body' => "  Agent original\n\n"])->assertSuccessful();
+
+        $message = Message::where('kind', 'outbound')->firstOrFail();
+        $this->assertSame("  Agent original\n\n", $message->body);
+        $this->assertSame('queued', $message->delivery);
+        $this->assertNull($message->delivery_error);
+        $this->assertTrue(app(TranslationPolicy::class)->ready($message));
+        Queue::assertPushed(SendTicketReply::class, 1);
     }
 
     public function test_pending_reply_requires_customer_language_translation_without_creating_a_duplicate(): void

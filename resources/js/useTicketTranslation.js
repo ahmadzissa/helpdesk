@@ -27,7 +27,7 @@ export function useTicketTranslation(ticket, body, privateNote) {
         ticket.value.customer_language = result.customer_language;
         ticket.value.translation_context = preserveContext ? { ...ticket.value.translation_context, target: result.customer_language?.language || null } : result.translation_context;
     }
-    function translateMessage(message, force = false) {
+    function translateMessage(message, force = false, silent = false) {
         if (!enabled.value) return Promise.resolve();
         if (!force && !messageNeedsTranslation(message, ticket.value?.customer_language?.language, settings.value.target)) return Promise.resolve();
         if (messageJobs.has(message.id)) return messageJobs.get(message.id);
@@ -50,7 +50,7 @@ export function useTicketTranslation(ticket, body, privateNote) {
             const liveMessage = ticket.value.messages.find(m => m.id === message.id);
             if (liveMessage && liveMessage.source_hash === message.source_hash) liveMessage.translation = saved.translation;
             setCustomer(saved, true);
-        } catch (e) { if (e.name !== 'AbortError' && !disposed) errors[message.id] = e.message; throw e; }
+        } catch (e) { if (!silent && e.name !== 'AbortError' && !disposed) errors[message.id] = e.message; throw e; }
         finally { pending[message.id] = false; }
         })();
         messageJobs.set(message.id, work);
@@ -59,16 +59,16 @@ export function useTicketTranslation(ticket, body, privateNote) {
     function detectLanguage(force = false) {
         if (!enabled.value) return Promise.resolve();
         if (detectionPromise) return detectionPromise;
-        if (!force && ticket.value.customer_language?.language && (ticket.value.customer_language.manual || ticket.value.customer_language.source_message_id === ticket.value.language_sample?.id)) return Promise.resolve();
+        if (!force && ticket.value.customer_language?.language && (ticket.value.customer_language.manual || (ticket.value.customer_language.source_message_id ?? null) === (ticket.value.language_sample?.id ?? null))) return Promise.resolve(true);
         detecting.value = true; languageError.value = '';
         detectionPromise = (async () => {
         try {
             if (force) setCustomer(await api('tickets/' + ticket.value.id + '/language', { method: 'PUT', body: { language: null } }));
             const sample = ticket.value.language_sample;
-            if (!sample?.body?.trim()) throw new Error('No customer email is available to detect. Select the language manually.');
-            await translateMessage(sample, true);
-            if (!ticket.value.customer_language?.language) throw new Error('Google could not detect a language. Select the customer language manually.');
-        } catch (e) { if (e.name !== 'AbortError') languageError.value = e.message; throw e; } finally { detecting.value = false; }
+            if (!sample?.body?.trim()) return false;
+            await translateMessage(sample, true, true);
+            return Boolean(ticket.value.customer_language?.language && (ticket.value.customer_language.manual || ticket.value.customer_language.source_message_id === sample.id));
+        } catch (e) { if (e.name === 'AbortError') throw e; return false; } finally { detecting.value = false; }
         })().finally(() => { detectionPromise = null; });
         return detectionPromise;
     }
@@ -95,7 +95,7 @@ export function useTicketTranslation(ticket, body, privateNote) {
     }
     async function prepareToSend(required = autoReply.value) {
         if (!enabled.value || privateNote.value || !required || previewReady.value) return true;
-        return await prepare() && Boolean(automaticSend.value || preview.value?.sameLanguage);
+        return await prepare() && Boolean(automaticSend.value || preview.value?.sameLanguage || preview.value?.sendOriginal);
     }
     async function prepare() {
         if (!enabled.value || translating.value || !body.value.trim()) return false;
@@ -103,18 +103,18 @@ export function useTicketTranslation(ticket, body, privateNote) {
         replySnapshot = false;
         const controller = new AbortController(); replyController = controller;
         try {
-            const { key, settings: currentSettings } = await config(true);
             const currentId = ticket.value.id;
             const latest = await api('tickets/' + currentId);
             controller.signal.throwIfAborted();
             if (ticket.value.id !== currentId) return false;
             ticket.value = latest.ticket;
             if (!enabled.value) return false;
-            await detectLanguage();
+            const customerLanguageAvailable = await detectLanguage();
             controller.signal.throwIfAborted();
+            const { key, settings: currentSettings } = customerLanguageAvailable ? await config(true) : { settings: settings.value };
             const input = body.value, subject = ticket.value.subject, context = JSON.parse(JSON.stringify(ticket.value.translation_context));
             replySnapshot = true;
-            const result = await prepareReply(input, subject, context, { key, adminLanguage: currentSettings.target, signal: controller.signal });
+            const result = await prepareReply(input, subject, context, { key, adminLanguage: currentSettings.target, signal: controller.signal, customerLanguageUnavailable: !customerLanguageAvailable });
             controller.signal.throwIfAborted();
             if (!previewMatches(result, body.value, ticket.value.subject, ticket.value.translation_context)) throw new Error('The reply or customer language changed. Translate again.');
             preview.value = result;

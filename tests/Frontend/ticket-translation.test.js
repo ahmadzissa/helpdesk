@@ -1,6 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createRenderer, ref, nextTick } from 'vue';
+import * as vue from 'vue';
+import { readFileSync } from 'node:fs';
+import { parse, compileScript } from '@vue/compiler-sfc';
+import * as translationHelpers from '../../resources/js/translation.js';
 
 globalThis.document = { querySelector: () => ({ content: 'synthetic-csrf-token' }) };
 const { useTicketTranslation } = await import('../../resources/js/useTicketTranslation.js');
@@ -28,6 +32,79 @@ function mount(google, makeFixture = fixture, detectedLanguage = 'en') {
     return { ticket, body, privateNote, translation, stop: () => app.unmount() };
 }
 const echoGoogle = async (url, options) => ({ ok: true, json: async () => [JSON.parse(options.body)[0][0].map(text => 'ES: ' + text), ['en']] });
+
+for (const sample of [null, { id: 7, body: '   ' }, { id: 7, body: 'Hola', source_hash: 'source' }]) {
+    test(`unavailable customer language silently sends the exact original with sample ${JSON.stringify(sample)}`, async () => {
+        const mounted = mount(async () => ({ ok: false, status: 429 }), () => ({ ...fixture(), customer_language: null, language_sample: sample, translation_context: { ...context, target: null } }));
+        mounted.body.value = '  Agent reply\n\nhttps://example.com\n';
+        try {
+            assert.equal(await mounted.translation.prepareToSend(), true);
+            assert.equal(mounted.translation.preview.value.sendOriginal, true);
+            assert.equal(mounted.translation.preview.value.body, mounted.body.value);
+            assert.equal(mounted.translation.translationError.value, '');
+            assert.equal(mounted.translation.languageError.value, '');
+            assert.deepEqual({ ...mounted.translation.errors }, {});
+            mounted.body.value += 'Edited';
+            assert.equal(mounted.translation.previewReady.value, false);
+        } finally { mounted.stop(); }
+    });
+}
+
+test('an unidentified customer language from a successful provider response sends the original', async () => {
+    const mounted = mount(async (url, options) => {
+        if (url === '/api/v1/messages/7/translation') return { ok: true, json: async () => ({ translation: {}, customer_language: null }) };
+        return echoGoogle(url, options);
+    }, () => ({ ...fixture(), customer_language: null, language_sample: { id: 7, body: '12345' }, translation_context: { ...context, target: null } }));
+    try {
+        assert.equal(await mounted.translation.prepareToSend(), true);
+        assert.equal(mounted.translation.preview.value.sendOriginal, true);
+        assert.equal(mounted.translation.languageError.value, '');
+    } finally { mounted.stop(); }
+});
+
+test('failed detection of a newer customer email sends the original instead of using a stale language', async () => {
+    const mounted = mount(async () => ({ ok: false, status: 429 }), () => ({ ...fixture(), customer_language: { language: 'es', manual: false, source_message_id: 6 }, language_sample: { id: 7, body: 'New email' } }));
+    try {
+        assert.equal(await mounted.translation.prepareToSend(), true);
+        assert.equal(mounted.translation.preview.value.sendOriginal, true);
+        assert.equal(mounted.translation.preview.value.body, mounted.body.value);
+        assert.equal(mounted.translation.translationError.value, '');
+    } finally { mounted.stop(); }
+});
+
+test('reviewing a saved reply silently sends its original when customer detection is unavailable', async () => {
+    const { descriptor } = parse(readFileSync(new URL('../../resources/js/components/TranslationReview.vue', import.meta.url), 'utf8'));
+    const compiled = compileScript(descriptor, { id: 'translation-review-test' }).content
+        .replace(/^import\s+(.+?)\s+from\s+['"](.+?)['"];?$/gm, (_, bindings, source) => {
+            const names = bindings.startsWith('{') ? bindings.replace(/\bas\b/g, ':') : `{ default: ${bindings} }`;
+            return `const ${names} = modules[${JSON.stringify(source)}];`;
+        }).replace('export default', 'return');
+    const message = { id: 8, delivery: 'translation_pending', body: 'Previous translation', original_body: '  Exact agent reply\n\n' };
+    const ticket = { ...fixture(), messages: [message], translation_context: { ...context, target: null } };
+    const calls = [];
+    let saved = 0;
+    const modules = {
+        vue, '../translation': translationHelpers, './Modal.vue': {},
+        '../store': { state: { workspace: { translation: { outgoing: true, auto_send: false } } }, api: async (path, options) => {
+            calls.push({ path, options });
+            if (path === 'tickets/1') return { ticket };
+            assert.equal(path, 'messages/8/prepare-translation');
+            return { delivery: 'queued' };
+        } },
+    };
+    const component = new Function('modules', compiled)(modules);
+    component.render = () => null;
+    const app = renderer.createApp(component, { ticket, message, assigneeId: 3, detectLanguage: async () => false, onSaved: () => { saved++; } });
+    const instance = app.mount({});
+    try {
+        await new Promise(resolve => setImmediate(resolve));
+        assert.equal(saved, 1);
+        assert.equal(calls.length, 2);
+        assert.deepEqual(calls[1].options.body, { body: message.original_body, send_original: true, assignee_id: 3 });
+        assert.equal(instance.$.setupState.error, '');
+        assert.equal(instance.$.setupState.preview, null);
+    } finally { app.unmount(); }
+});
 
 test('known matching languages skip automatic message translation requests', async () => {
     const mounted = mount(() => assert.fail('Matching messages must not be translated'), () => ({ ...fixture(), customer_language: { language: 'en', manual: true } }));

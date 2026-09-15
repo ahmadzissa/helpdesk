@@ -12,20 +12,25 @@ async function translate() {
     busy.value = true; error.value = ''; preview.value = null;
     let automaticSend = false;
     try {
-        const config = await api('translation/config');
-        state.workspace.translation = config.settings;
-        await props.detectLanguage?.();
+        const customerLanguageAvailable = await props.detectLanguage?.();
         const latest = await api('tickets/' + props.ticket.id);
         const live = latest.ticket.messages.find(m => m.id === props.message.id);
         if (!live || live.attempt_id || !['translation_pending', 'held', 'saved'].includes(live.delivery)) throw new Error('This reply changed. Close this preview and refresh the ticket.');
+        if (customerLanguageAvailable === false || !latest.ticket.translation_context?.target) {
+            busy.value = false;
+            await send(true, true);
+            return;
+        }
+        const config = await api('translation/config');
+        state.workspace.translation = config.settings;
         preview.value = await prepareReply(live.original_body ?? live.body, latest.ticket.subject, latest.ticket.translation_context, { key: config.key, adminLanguage: config.settings.target });
         automaticSend = preview.value.sameLanguage || (config.settings.outgoing && config.settings.auto_send);
     } catch (e) { error.value = e.message; } finally { busy.value = false; }
     if (automaticSend && preview.value) await send();
 }
-async function send(sendOriginal = false) {
+async function send(sendOriginal = false, languageUnavailable = false) {
     sendOriginal = sendOriginal === true || !translationEnabled.value;
-    if (sendOriginal && translationEnabled.value && state.workspace.translation?.outgoing) return;
+    if (sendOriginal && !languageUnavailable && translationEnabled.value && state.workspace.translation?.outgoing) return;
     if ((!preview.value && !sendOriginal) || busy.value) return;
     busy.value = true; error.value = '';
     try {

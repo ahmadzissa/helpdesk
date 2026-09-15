@@ -86,13 +86,18 @@ class TranslationPolicy
     public function outgoing(Ticket $ticket, string $body, ?array $translation, bool $sendOriginal = false): array
     {
         $required = $ticket->translation_enabled && $this->settings()['outgoing'];
+        $context = $this->context($ticket);
+        $languageUnavailable = ! $context['target'] || ! $this->detectionCurrent($ticket, $context);
+        if (! $translation && $languageUnavailable) {
+            $sendOriginal = true;
+        }
         if (! $ticket->translation_enabled) {
             $body = $translation['original_body'] ?? $body;
             $translation = null;
             $sendOriginal = true;
         }
         if ($sendOriginal) {
-            abort_if($required, 422, 'Translate this reply into the customer language before sending.');
+            abort_if($required && ! $languageUnavailable, 422, 'Translate this reply into the customer language before sending.');
             abort_if($translation !== null, 422, 'Choose either the translated reply or the original reply.');
 
             return ['body' => $body, 'original_body' => $body, 'translated_subject' => null,
@@ -133,18 +138,19 @@ class TranslationPolicy
     {
         $context = $message->translation_context;
         $required = $message->ticket->translation_enabled && $this->settings()['outgoing'];
-        if ($required && (! $context || ! empty($context['send_original']) || empty($context['target']))) {
+        $expected = $this->context($message->ticket);
+        $originalFallback = ! empty($context['send_original']) && (! $expected['target'] || ! $this->detectionCurrent($message->ticket, $expected));
+        if ($required && ! $originalFallback && (! $context || ! empty($context['send_original']) || empty($context['target']))) {
             return false;
         }
         if (! $context) {
             return ! $required;
         }
-        $expected = $this->context($message->ticket);
         if (empty($context['send_original']) && ! $this->detectionCurrent($message->ticket, $expected)) {
             return false;
         }
         foreach ($expected as $key => $value) {
-            if (! empty($context['send_original']) && in_array($key, ['target', 'inbound_id'], true)) {
+            if (! $required && ! empty($context['send_original']) && in_array($key, ['target', 'inbound_id'], true)) {
                 continue;
             }
             if (($context[$key] ?? ($key === 'translation_enabled' ? true : null)) !== $value) {
@@ -158,6 +164,13 @@ class TranslationPolicy
 
     public function holdIfNeeded(Message $message): void
     {
+        if ($message->kind === 'outbound' && $message->rule_name === null && ! $message->attempt_id && ! $message->translation_context) {
+            $context = $this->context($message->ticket);
+            $sample = $this->latestInbound($message->ticket);
+            if (! $context['target'] && (! $sample || trim(app(EmailContent::class)->text($sample)) === '')) {
+                $message->update($this->outgoing($message->ticket, $message->original_body ?? $message->body, null, true));
+            }
+        }
         if ($message->kind === 'outbound' && ! $this->ready($message)) {
             $automatic = $message->rule_name !== null && ! $message->attempt_id;
             if ($automatic && ! in_array($message->delivery, ['queued', 'translation_pending'])) {
