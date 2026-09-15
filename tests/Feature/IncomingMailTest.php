@@ -13,6 +13,7 @@ use App\Services\IncomingMail;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\Storage;
+use PHPUnit\Framework\Attributes\DataProvider;
 use Tests\TestCase;
 
 class IncomingMailTest extends TestCase
@@ -53,6 +54,56 @@ class IncomingMailTest extends TestCase
         $otherBox = Mailbox::factory()->create();
         $other = $importer->import($otherBox, $this->mail(['external_id' => 'other@example.com', 'references' => ['message-1@example.com'], 'subject' => 'Re: request [#'.$ticket->id.']']));
         $this->assertNotSame($ticket->id, $other->id);
+    }
+
+    public function test_self_sent_bot_request_uses_customer_reply_to_without_automatic_replies(): void
+    {
+        Queue::fake();
+        $box = Mailbox::factory()->create(['email' => 'support@example.com']);
+        $reply = CannedReply::factory()->create();
+        Automation::factory()->create(['actions' => ['reply_id' => $reply->id]]);
+        $importer = app(IncomingMail::class);
+        $mail = $this->mail(['from_email' => ' SUPPORT@EXAMPLE.COM ', 'from_name' => 'Support Bot',
+            'reply_to_email' => ' Olivia@Example.com ', 'reply_to_name' => 'Olivia Customer']);
+
+        $ticket = $importer->import($box, $mail);
+
+        $this->assertSame('olivia@example.com', $ticket->requester_email);
+        $this->assertSame('Olivia Customer', $ticket->requester_name);
+        $this->assertSame('olivia@example.com', $ticket->messages()->first()->author_email);
+        $this->assertNull($importer->import($box, $mail));
+        $this->assertDatabaseCount('automation_runs', 0);
+        Queue::assertNothingPushed();
+
+        $followUp = $importer->import($box, $this->mail(['external_id' => 'follow-up@example.com', 'references' => ['message-1@example.com']]));
+        $this->assertSame($ticket->id, $followUp->id);
+        $this->assertSame(2, $ticket->messages()->count());
+    }
+
+    /** @return array<string, array{string}> */
+    public static function unsafeSelfReplyAddresses(): array
+    {
+        return ['missing' => [''], 'invalid' => ['not-an-email'], 'same mailbox' => [' SUPPORT@EXAMPLE.COM '],
+            'another support mailbox' => ['OTHER@EXAMPLE.COM']];
+    }
+
+    #[DataProvider('unsafeSelfReplyAddresses')]
+    public function test_self_sent_mail_without_a_customer_reply_address_is_skipped(string $replyTo): void
+    {
+        $box = Mailbox::factory()->create(['email' => 'support@example.com']);
+        Mailbox::factory()->create(['email' => 'other@example.com']);
+
+        $this->assertNull(app(IncomingMail::class)->import($box, $this->mail(['from_email' => $box->email, 'reply_to_email' => $replyTo])));
+        $this->assertDatabaseCount('tickets', 0);
+        $this->assertDatabaseCount('mail_import_receipts', 0);
+    }
+
+    public function test_customer_mail_keeps_its_sender_when_reply_to_differs(): void
+    {
+        $box = Mailbox::factory()->create();
+        $ticket = app(IncomingMail::class)->import($box, $this->mail(['reply_to_email' => 'someone-else@example.com']));
+
+        $this->assertSame('olivia@example.com', $ticket->requester_email);
     }
 
     public function test_imported_messages_are_not_reimported_months_later_after_archiving_or_deletion(): void

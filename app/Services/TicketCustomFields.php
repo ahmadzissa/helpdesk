@@ -31,6 +31,17 @@ class TicketCustomFields
     /** @param iterable<string> $sources */
     public function detectShopifyDomain(iterable $sources): ?string
     {
+        $domains = $this->detectShopifyDomains($sources);
+
+        return count($domains) === 1 ? $domains[0] : null;
+    }
+
+    /**
+     * @param  iterable<string>  $sources
+     * @return list<string>
+     */
+    public function detectShopifyDomains(iterable $sources): array
+    {
         $domains = [];
         foreach ($sources as $source) {
             $text = html_entity_decode($source, ENT_QUOTES | ENT_HTML5, 'UTF-8');
@@ -38,12 +49,23 @@ class TicketCustomFields
             foreach ($matches[1] as $domain) {
                 $domains[mb_strtolower($domain)] = true;
             }
-            if (count($domains) > 1) {
-                return null;
-            }
         }
 
-        return array_key_first($domains);
+        return array_keys($domains);
+    }
+
+    /** @return Generator<int, string> */
+    private function requesterShopifyInputs(Ticket $ticket, string $key): Generator
+    {
+        $email = mb_strtolower(trim($ticket->requester_email));
+        if ($email === '') {
+            return;
+        }
+        $tickets = Ticket::where('id', '!=', $ticket->id)->whereRaw('LOWER(requester_email) = ?', [$email])
+            ->select(['id', 'custom_fields'])->lazyById(100);
+        foreach ($tickets as $other) {
+            yield $other->custom_fields[$key] ?? '';
+        }
     }
 
     /** @return Generator<int, string> */
@@ -64,8 +86,15 @@ class TicketCustomFields
         if ($key === null || $ticket->merged_into_id || trim($ticket->custom_fields[$key] ?? '') !== '') {
             return false;
         }
-        $domain = $this->detectShopifyDomain($sources);
-        if ($domain === null) {
+        $domains = $this->detectShopifyDomains($sources);
+        if (count($domains) > 1) {
+            return false;
+        }
+        if ($domains === []) {
+            $domains = $this->detectShopifyDomains($this->requesterShopifyInputs($ticket, $key));
+        }
+        $domain = implode(', ', $domains);
+        if ($domain === '' || mb_strlen($domain) > 500) {
             return false;
         }
         if ($dryRun) {

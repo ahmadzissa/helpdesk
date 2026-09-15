@@ -108,6 +108,77 @@ class ShopifyDomainDetectionTest extends TestCase
         $this->assertSame('manual.myshopify.com', $ticket->fresh()->custom_fields[$key]);
     }
 
+    public function test_missing_domain_uses_saved_input_from_another_ticket_with_the_same_email(): void
+    {
+        $key = $this->configureField();
+        Ticket::factory()->create(['requester_email' => ' CUSTOMER@example.com ', 'folder' => 'archive',
+            'custom_fields' => [$key => 'https://SAVED.myshopify.com/admin']]);
+        $ticket = app(IncomingMail::class)->import(Mailbox::factory()->create(), [
+            'external_id' => 'missing-domain@example.com', 'from_email' => 'customer@example.com',
+            'subject' => 'Another question', 'body' => 'Please help again.',
+        ]);
+
+        $this->assertSame('saved.myshopify.com', $ticket->fresh()->custom_fields[$key]);
+    }
+
+    public function test_current_message_domain_takes_priority_over_other_ticket_inputs(): void
+    {
+        $key = $this->configureField();
+        Ticket::factory()->create(['requester_email' => 'customer@example.com', 'custom_fields' => [$key => 'old.myshopify.com']]);
+        $ticket = Ticket::factory()->create(['requester_email' => 'customer@example.com']);
+        Message::factory()->create(['ticket_id' => $ticket->id, 'body' => 'Please help with current.myshopify.com']);
+
+        $this->assertSame('current.myshopify.com', $ticket->fresh()->custom_fields[$key]);
+    }
+
+    public function test_fallback_collects_all_unique_domains_from_saved_inputs(): void
+    {
+        $key = $this->configureField();
+        Ticket::factory()->create(['requester_email' => 'customer@example.com', 'custom_fields' => [$key => 'first.myshopify.com, second.myshopify.com']]);
+        Ticket::factory()->create(['requester_email' => 'customer@example.com', 'custom_fields' => [$key => 'FIRST.myshopify.com, third.myshopify.com']]);
+        $ticket = Ticket::factory()->create(['requester_email' => 'customer@example.com', 'custom_fields' => ['order' => '123']]);
+        Message::factory()->create(['ticket_id' => $ticket->id, 'body' => 'Another question.']);
+
+        $this->assertSame(['order' => '123', $key => 'first.myshopify.com, second.myshopify.com, third.myshopify.com'], $ticket->fresh()->custom_fields);
+    }
+
+    public function test_existing_tickets_can_backfill_from_saved_inputs_without_changing_activity(): void
+    {
+        $key = $this->configureField();
+        Ticket::factory()->create(['requester_email' => 'customer@example.com', 'custom_fields' => [$key => 'saved.myshopify.com']]);
+        $ticket = Ticket::factory()->create(['requester_email' => 'customer@example.com']);
+        $activity = $ticket->only(['last_activity_at', 'workflow_activity_at', 'status', 'unread']);
+
+        $this->artisan('tickets:fill-shopify-domains', ['--dry-run' => true])->expectsOutput('Would fill 1 Shopify Domain field(s).')->assertSuccessful();
+        $this->assertSame([], $ticket->fresh()->custom_fields);
+        $this->artisan('tickets:fill-shopify-domains')->expectsOutput('Filled 1 Shopify Domain field(s).')->assertSuccessful();
+        $this->assertSame('saved.myshopify.com', $ticket->fresh()->custom_fields[$key]);
+        $this->assertEquals($activity, $ticket->fresh()->only(array_keys($activity)));
+    }
+
+    public function test_ambiguous_current_domains_do_not_use_a_different_historical_store(): void
+    {
+        $key = $this->configureField();
+        Ticket::factory()->create(['requester_email' => 'customer@example.com', 'custom_fields' => [$key => 'old.myshopify.com']]);
+        $ticket = Ticket::factory()->create(['requester_email' => 'customer@example.com']);
+        Message::factory()->create(['ticket_id' => $ticket->id, 'body' => 'first.myshopify.com and second.myshopify.com']);
+
+        $this->assertArrayNotHasKey($key, $ticket->fresh()->custom_fields);
+    }
+
+    public function test_fallback_only_uses_valid_shopify_inputs_for_the_exact_requester(): void
+    {
+        $key = $this->configureField();
+        $other = Ticket::factory()->create(['requester_email' => 'customer@example.com',
+            'custom_fields' => [$key => 'invalid.myshopify.com.evil.test', 'order' => 'wrong-field.myshopify.com']]);
+        Message::factory()->create(['ticket_id' => $other->id, 'body' => 'message-only.myshopify.com']);
+        Ticket::factory()->create(['requester_email' => 'another@example.com', 'custom_fields' => [$key => 'unrelated.myshopify.com']]);
+        $ticket = Ticket::factory()->create(['requester_email' => 'customer@example.com']);
+        Message::factory()->create(['ticket_id' => $ticket->id, 'body' => 'Please help.']);
+
+        $this->assertArrayNotHasKey($key, $ticket->fresh()->custom_fields);
+    }
+
     public function test_backfill_can_add_the_field_preserving_existing_definitions_and_revision(): void
     {
         $order = ['key' => (string) Str::uuid(), 'name' => 'Order number'];

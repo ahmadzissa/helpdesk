@@ -15,7 +15,7 @@ class IncomingMail
     public function __construct(private AutomationEngine $automations) {}
 
     /**
-     * @param  array{external_id:string, from_email:string, from_name?:string, subject:string, body:string, references?:array, automated?:bool, attachments?:array}  $data
+     * @param  array{external_id:string, from_email:string, from_name?:string, reply_to_email?:string, reply_to_name?:string, subject:string, body:string, references?:array, automated?:bool, attachments?:array}  $data
      */
     public function import(Mailbox $mailbox, array $data): ?Ticket
     {
@@ -23,8 +23,18 @@ class IncomingMail
         $data['subject'] = $headers->decode($data['subject']);
         $data['from_name'] = $headers->decode($data['from_name'] ?? '');
         $email = mb_strtolower(trim($data['from_email']));
-        if (! filter_var($email, FILTER_VALIDATE_EMAIL) || $email === mb_strtolower($mailbox->email)) {
+        if (! filter_var($email, FILTER_VALIDATE_EMAIL)) {
             return null;
+        }
+        if ($email === mb_strtolower(trim($mailbox->email))) {
+            $replyToEmail = mb_strtolower(trim($data['reply_to_email'] ?? ''));
+            if (! filter_var($replyToEmail, FILTER_VALIDATE_EMAIL) || $replyToEmail === $email
+                || Mailbox::whereRaw('LOWER(TRIM(email)) = ?', [$replyToEmail])->exists()) {
+                return null;
+            }
+            $email = $replyToEmail;
+            $data['from_name'] = $headers->decode($data['reply_to_name'] ?? '');
+            $data['automated'] = true;
         }
         $externalId = mb_substr($data['external_id'], 0, 255);
         if (Message::where('mailbox_id', $mailbox->id)->where('external_id', $externalId)->exists()) {

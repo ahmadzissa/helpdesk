@@ -56,6 +56,8 @@ class SyncMailbox implements ShouldBeUnique, ShouldQueue
                 if (! $sender) {
                     return;
                 }
+                $replyToAddresses = $message->get('reply_to');
+                $replyTo = $replyToAddresses->count() === 1 ? $replyToAddresses->first() : null;
                 $rawId = trim((string) $message->get('message_id'), '<> ');
                 $body = $message->getTextBody();
                 if (! $body) {
@@ -71,6 +73,7 @@ class SyncMailbox implements ShouldBeUnique, ShouldQueue
                 }
                 $importer->import($mailbox, ['external_id' => $rawId ?: (string) $message->get('relay_import_fingerprint'),
                     'from_email' => $sender->mail, 'from_name' => $sender->personal, 'subject' => (string) $message->get('subject'),
+                    'reply_to_email' => $replyTo?->mail ?? '', 'reply_to_name' => $replyTo?->personal ?? '',
                     'body' => $body, 'email_html' => $message->getHTMLBody(), 'references' => $references, 'attachments' => $attachments,
                     'automated' => $reports->isReport($message) || ($auto !== '' && $auto !== 'no') || in_array($precedence, ['bulk', 'list', 'junk'])]);
             });

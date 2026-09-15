@@ -85,6 +85,39 @@ class IncrementalMailSyncTest extends TestCase
         (new SyncMailbox($mailbox->id))->handle(app(IncomingMail::class), $inbox);
     }
 
+    /** @return array<string, array{string, bool}> */
+    public static function botReplyHeaders(): array
+    {
+        return [
+            'customer reply to' => ["Reply-To: Customer <customer@example.com>\r\n", true],
+            'folded reply to' => ["Reply-To:\r\n Customer <customer@example.com>\r\n", true],
+            'no reply to' => ['', false],
+            'self reply to' => ["Reply-To: support@example.com\r\n", false],
+            'ambiguous reply to' => ["Reply-To: customer@example.com, other@example.com\r\n", false],
+        ];
+    }
+
+    #[DataProvider('botReplyHeaders')]
+    public function test_sync_imports_self_sent_bot_mail_only_with_one_customer_reply_to(string $headers, bool $shouldImport): void
+    {
+        $mailbox = $this->mailbox();
+        [$inbox, $protocol] = $this->inbox(2);
+        $protocol->shouldReceive('search')->once()->andReturn($this->response([1]));
+        $this->expectDates($protocol, [1], [1 => '11-Sep-2026 10:01:00 +0000']);
+        $raw = $headers.str_replace('From: Customer <customer@example.com>', 'From: Support Bot <support@example.com>', $this->mail());
+        $protocol->shouldReceive('fetch')->once()->with(['UID', 'BODY.PEEK[]'], [1])
+            ->andReturn($this->response([1 => ['BODY[]' => $raw]]));
+
+        $this->runSync($mailbox, $inbox);
+
+        $this->assertDatabaseCount('tickets', $shouldImport ? 1 : 0);
+        if ($shouldImport) {
+            $this->assertDatabaseHas('tickets', ['requester_email' => 'customer@example.com', 'requester_name' => 'Customer']);
+        }
+        $this->assertSame(1, $mailbox->fresh()->imap_last_uid);
+        $this->assertSame('idle', $mailbox->fresh()->sync_status);
+    }
+
     /** @return array<string, array{string}> */
     public static function replyHeaders(): array
     {
