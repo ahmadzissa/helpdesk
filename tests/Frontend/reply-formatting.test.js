@@ -1,6 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { replyLink, automationAction } from '../../resources/js/replyFormatting.js';
+import { replyFormat, replyLink, automationAction } from '../../resources/js/replyFormatting.js';
+
+test('toolbar formatting keeps selection whitespace outside Markdown delimiters', () => {
+    assert.equal(replyFormat('To ', '**'), '**To** ');
+    assert.equal(replyFormat('  thank you\n', '_'), '  _thank you_\n');
+    assert.equal(replyFormat(' ', '**'), ' ');
+    assert.equal(replyFormat('', '**'), '**text**');
+});
 
 test('reply links preserve URL punctuation and escape selected Markdown text', () => {
     assert.equal(replyLink('Read [this]', 'https://example.com/a_(b)?x=1&y=2'), '[Read \\[this\\]](<https://example.com/a_(b)?x=1&y=2>)');

@@ -2,7 +2,7 @@
 import { ref, nextTick, watch } from 'vue';
 import { api } from '../store';
 import { cannedImageIds, removeCannedImage, removedCannedImageIds } from '../replyEditor';
-import { replyLink } from '../replyFormatting';
+import { replyFormat, replyLink } from '../replyFormatting';
 import ReplyEditor from './ReplyEditor.vue';
 import ReplyFormattingToolbar from './ReplyFormattingToolbar.vue';
 
@@ -24,7 +24,7 @@ watch(() => props.modelValue, (current, previous) => {
 function insert(text) { editor.value?.insert(text); }
 function format(marker) {
     const start = editor.value.selectionStart, end = editor.value.selectionEnd;
-    insert(marker + (props.modelValue.slice(start, end) || 'text') + marker);
+    insert(replyFormat(props.modelValue.slice(start, end), marker));
 }
 function openLink() {
     linkSelection = { start: editor.value.selectionStart, end: editor.value.selectionEnd };

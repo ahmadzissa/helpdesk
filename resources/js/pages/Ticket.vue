@@ -15,7 +15,7 @@ import { guardDraftNavigation } from '../draftNavigation';
 import { state, api, notify, initials, statusClass, refreshSendingSafety } from '../store';
 import Modal from '../components/Modal.vue';
 import InspectorSection from '../components/InspectorSection.vue';
-import { replyLink, automationAction } from '../replyFormatting';
+import { replyFormat, replyLink, automationAction } from '../replyFormatting';
 import TicketTools from '../components/TicketTools.vue';
 import TicketCustomFields from '../components/TicketCustomFields.vue';
 import DeliveryDetails from '../components/DeliveryDetails.vue';
@@ -54,10 +54,18 @@ async function reviewTranslation(message) { reviewMessage.value = message; }
 async function reviewedTranslation() { reviewMessage.value = null; await refreshTicket(); notify('Reply prepared for delivery'); }
 const canned = computed(() => state.workspace.replies.filter(r => (r.title + r.shortcut + r.body).toLowerCase().includes(replySearch.value.toLowerCase())));
 const editorSelection = ref({ start: 0, end: 0 }), editorFocused = ref(false), suggestionIndex = ref(0), dismissedShortcut = ref('');
+const replyEditorArea = ref(), suggestionsHeight = ref(680);
 const shortcutTrigger = computed(() => editorSelection.value.start === editorSelection.value.end ? cannedShortcutTrigger(body.value, editorSelection.value.start) : null);
 const shortcutKey = computed(() => shortcutTrigger.value ? JSON.stringify(shortcutTrigger.value) : '');
 const suggestedReplies = computed(() => shortcutTrigger.value ? filterCannedReplies(state.workspace.replies, shortcutTrigger.value.query) : []);
 const showSuggestions = computed(() => editorFocused.value && !sending.value && shortcutTrigger.value && dismissedShortcut.value !== shortcutKey.value);
+function resizeSuggestions() {
+    if (!showSuggestions.value || !replyEditorArea.value) return;
+    const top = replyEditorArea.value.getBoundingClientRect().top;
+    const pageTop = replyEditorArea.value.closest('.ticket-page')?.getBoundingClientRect().top || 0;
+    suggestionsHeight.value = Math.max(0, Math.min(680, top - Math.max(0, pageTop) - 18));
+}
+watch([showSuggestions, expanded, body, formatVisible], () => nextTick(resizeSuggestions));
 watch(shortcutKey, () => { suggestionIndex.value = 0; if (!shortcutKey.value) dismissedShortcut.value = ''; });
 function chooseSuggestion(reply) {
     const trigger = shortcutTrigger.value;
@@ -101,6 +109,7 @@ const removeDraftGuard = guardDraftNavigation(router, { isDirty: hasUnsavedDraft
 watch(privateNote, value => { sendStatus.value = value ? ticket.value?.status || 'Open' : 'Pending'; });
 function beforeUnload(event) { if (hasUnsavedDraft() || sending.value) { event.preventDefault(); event.returnValue = ''; } }
 onBeforeUnmount(() => {
+    window.removeEventListener('resize', resizeSuggestions); document.removeEventListener('scroll', resizeSuggestions, true);
     ticketRefresher.dispose(); document.removeEventListener('visibilitychange', refreshVisibleTicket);
     removeDraftGuard(); clearTimeout(draftTimer); clearInterval(deliveryTimer); window.removeEventListener('beforeunload', beforeUnload);
     if (hasUnsavedDraft() && !sending.value) saveDraft().catch(e => notify('Couldn’t save your draft. ' + e.message, true));
@@ -119,7 +128,7 @@ const ticketRefresher = createTicketRefresher({
 function refreshTicket() { return ticketRefresher.refresh(); }
 function refreshVisibleTicket() { if (loaded && !sending.value && !ticketMutations && !document.hidden) refreshTicket().catch(() => {}); }
 watch(() => state.refresh, refreshVisibleTicket);
-onMounted(() => { load(); window.addEventListener('beforeunload', beforeUnload); document.addEventListener('visibilitychange', refreshVisibleTicket); deliveryTimer = setInterval(refreshVisibleTicket, 15000); });
+onMounted(() => { load(); window.addEventListener('beforeunload', beforeUnload); window.addEventListener('resize', resizeSuggestions); document.addEventListener('scroll', resizeSuggestions, true); document.addEventListener('visibilitychange', refreshVisibleTicket); deliveryTimer = setInterval(refreshVisibleTicket, 15000); });
 async function uploadImage(file) {
     if (!file || uploadingImage.value) return;
     if (!['image/png', 'image/jpeg', 'image/gif', 'image/webp'].includes(file.type) || file.size > 5 * 1024 * 1024) { notify('Choose a PNG, JPEG, GIF, or WebP image up to 5 MB.', true); return; }
@@ -184,7 +193,7 @@ function insert(text) {
 }
 function format(before, after = before) {
     const start = editor.value?.selectionStart || 0, end = editor.value?.selectionEnd || 0;
-    insert(before + (body.value.slice(start, end) || 'text') + after);
+    insert(replyFormat(body.value.slice(start, end), before, after));
 }
 function openLinkDialog() {
     linkSelection = { start: editor.value?.selectionStart ?? body.value.length, end: editor.value?.selectionEnd ?? body.value.length };
@@ -287,11 +296,10 @@ async function saveDetails() {
         <div v-if="!ticket.merged_into_id" class="composer-wrap" :class="{ 'suggestions-open': showSuggestions }"><div class="ticket-body-content">
             <form class="composer" :class="{ 'private-composer': privateNote, 'suggestions-open': showSuggestions }" @submit.prevent="send">
                 <div class="composer-recipient"><span><Icon :name="privateNote ? 'lock' : 'mail'" :size="14" />{{ privateNote ? 'Private note for your team' : 'Reply to ' + ticket.requester_email }}</span><span class="draft-state">{{ draftState }}</span><button type="button" class="icon-button" @click="expanded = !expanded" :aria-label="expanded ? 'Collapse reply editor' : 'Expand reply editor'" :aria-expanded="expanded"><Icon :name="expanded ? 'minimize' : 'expand'" :size="15" /></button></div>
-                <div class="reply-editor-area">
-                    <div v-if="showSuggestions" id="canned-suggestions" class="canned-suggestions" role="listbox" aria-label="Matching canned responses" @mousedown.prevent>
-                        <div class="canned-suggestions-heading">Canned responses <small>↑ ↓ to browse · Enter to insert</small></div>
-                        <button v-for="(reply, index) in suggestedReplies" :id="'canned-suggestion-' + index" :key="reply.id" type="button" role="option" :aria-selected="index === suggestionIndex" :class="{ selected: index === suggestionIndex }" @mouseenter="suggestionIndex = index" @click="chooseSuggestion(reply)">
-                            <strong>{{ reply.title }}</strong><span class="shortcut-badges"><kbd v-for="alias in cannedShortcuts(reply.shortcut)" :key="alias">{{ alias }}</kbd></span>
+                <div ref="replyEditorArea" class="reply-editor-area">
+                    <div v-if="showSuggestions" id="canned-suggestions" class="canned-suggestions" :style="{ maxHeight: suggestionsHeight + 'px' }" role="listbox" aria-label="Matching canned responses" @mousedown.prevent>
+                        <button v-for="(reply, index) in suggestedReplies" :id="'canned-suggestion-' + index" :key="reply.id" type="button" role="option" :aria-selected="index === suggestionIndex" :class="{ selected: index === suggestionIndex }" :title="cannedShortcuts(reply.shortcut).join(', ')" @mouseenter="suggestionIndex = index" @click="chooseSuggestion(reply)">
+                            <span class="canned-suggestion-title">{{ reply.title }}</span><span class="canned-suggestion-count" aria-label="1 response">1</span><Icon name="right" :size="17" />
                         </button>
                         <p v-if="!suggestedReplies.length" class="canned-suggestions-empty" role="status">No matching canned responses.</p>
                     </div>
@@ -324,13 +332,13 @@ async function saveDetails() {
                 <label class="inspector-field"><span>Priority</span><select :value="ticket.priority" @change="update({ priority: $event.target.value }).catch(() => {})" aria-label="Ticket priority"><option v-for="p in state.workspace.priorities" :key="p">{{ p }}</option></select></label>
                 <div class="inspector-field"><span>Created</span><span>{{ new Date(ticket.created_at).toLocaleDateString() }}</span></div>
             </InspectorSection>
+            <InspectorSection v-if="ticket.custom_field_definitions?.length" title="Custom fields"><TicketCustomFields :ticket="ticket" :save-field="saveCustomField" /></InspectorSection>
             <InspectorSection title="Responsibility" class="inspector-section"><label class="inspector-field"><span>Agent</span><select :value="ticket.assignee_id ?? ''" @change="update({ assignee_id: $event.target.value ? Number($event.target.value) : null }).catch(() => {})" aria-label="Ticket assignee" :disabled="sending"><option value="">Unassigned</option><option v-for="agent in state.workspace.agents" :key="agent.id" :value="agent.id">{{ agent.name }}</option></select></label><label class="inspector-field"><span>Team</span><select :value="ticket.team_id ?? ''" @change="update({ team_id: $event.target.value ? Number($event.target.value) : null }).catch(() => {})" aria-label="Ticket team"><option value="">No team</option><option v-for="team in state.workspace.teams" :key="team.id" :value="team.id">{{ team.name }}</option></select></label></InspectorSection>
             <InspectorSection title="Tags" class="inspector-section"><div class="inspector-tags"><span v-for="tag in ticket.tags" :key="tag" class="tag">{{ tag }}<button @click="update({ tags: ticket.tags.filter(t => t !== tag) }, 'Tag removed').catch(() => {})" :aria-label="'Remove tag ' + tag"><Icon name="x" :size="12" /></button></span></div><form class="add-tag" @submit.prevent="addTag"><Icon name="plus" :size="14" /><input v-model="newTag" placeholder="Add a tag…" aria-label="Add a tag" maxlength="60" /></form></InspectorSection>
             <InspectorSection title="Requester" class="inspector-section"><div class="requester-card"><span class="avatar">{{ initials(ticket.requester_name || ticket.requester_email) }}</span><div><strong>{{ ticket.requester_name || ticket.requester_email }}</strong><small>{{ ticket.requester_email }}</small></div></div><span v-if="ticket.company" class="muted">{{ ticket.company }}</span></InspectorSection>
             <InspectorSection v-if="translationEnabled" title="Customer language" class="inspector-section customer-language"><LanguagePicker :model-value="ticket.customer_language?.language" label="Customer language" automatic :disabled="detecting || sending" @update:model-value="setLanguage" /><small class="muted">{{ ticket.customer_language?.manual ? 'Selected manually' : 'Detected from the latest customer email' }} · saved for this email address</small><button type="button" class="text-button" @click="detectLanguage(true).catch(() => {})" :disabled="detecting || sending">{{ detecting ? 'Detecting…' : 'Detect language again' }}</button><p v-if="languageError" class="error-message" role="alert">{{ languageError }}</p></InspectorSection>
             <InspectorSection title="People in the loop" class="inspector-section"><button @click="editDetails" class="icon-button" aria-label="Edit CC recipients"><Icon name="plus" :size="14" /></button><span v-if="!ticket.cc?.length" class="muted">No additional recipients</span><div v-for="email in ticket.cc" :key="email" class="cc-email"><Icon name="mail" :size="13" />{{ email }}</div></InspectorSection>
             <InspectorSection title="Email source" class="inspector-section"><label class="inspector-field"><span>Mailbox</span><select :value="ticket.mailbox_id ?? ''" @change="changeMailbox" aria-label="Ticket mailbox" :disabled="sending || !sendingAccounts.length"><option v-if="mailboxUnavailable" :value="ticket.mailbox_id ?? ''" disabled>{{ ticket.mailbox?.name ? ticket.mailbox.name + ' · Sending disabled' : 'Choose a sending account' }}</option><option v-for="box in sendingAccounts" :key="box.id" :value="box.id">{{ box.name }}</option></select></label><small class="muted source-email">{{ ticket.mailbox?.email }}</small><div class="inspector-field"><span>Source</span><span aria-label="Ticket source">{{ ticket.source }}</span></div></InspectorSection>
-            <InspectorSection v-if="ticket.custom_field_definitions?.length" title="Custom fields"><TicketCustomFields :ticket="ticket" :save-field="saveCustomField" /></InspectorSection>
         </fieldset>
             <InspectorSection title="Requester’s tickets" class="requester-tickets">
                 <div class="requester-tickets-heading"><strong>Recent tickets</strong><button v-if="!ticket.merged_into_id" type="button" class="text-button" @click="ticketTools?.openMerge()">Merge</button></div>

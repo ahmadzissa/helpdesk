@@ -1,6 +1,6 @@
 <script setup>
 import { ref, watch, onMounted, onBeforeUnmount } from 'vue';
-import { normalizeImagePaste, replyEditorHtml, replyEditorText } from '../replyEditor';
+import { normalizeImagePaste, replyEditorHtml, replyEditorText, replyEditorOffset, replyEditorPoint } from '../replyEditor';
 
 const props = defineProps({ modelValue: { type: String, default: '' }, disabled: Boolean, placeholder: String, expanded: Boolean, removableImages: Boolean });
 const emit = defineEmits(['update:modelValue', 'image', 'keydown', 'selection', 'delete-image']);
@@ -10,34 +10,17 @@ let selection = { start: 0, end: 0 };
 function rememberSelection() {
     const selected = window.getSelection();
     if (!selected?.rangeCount || !element.value?.contains(selected.anchorNode) || !element.value.contains(selected.focusNode)) return;
-    const range = selected.getRangeAt(0), prefix = range.cloneRange();
-    prefix.selectNodeContents(element.value);
-    prefix.setEnd(range.startContainer, range.startOffset);
-    const start = replyEditorText(prefix.cloneContents()).length;
-    selection = { start, end: start + replyEditorText(range.cloneContents()).length };
+    const range = selected.getRangeAt(0);
+    selection = {
+        start: replyEditorOffset(element.value, range.startContainer, range.startOffset),
+        end: replyEditorOffset(element.value, range.endContainer, range.endOffset),
+    };
     emit('selection', { ...selection });
 }
 
 function setSelectionRange(start, end = start) {
     const range = document.createRange();
-    function point(offset) {
-        const walker = document.createTreeWalker(element.value, NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT, {
-            acceptNode: node => node.parentElement?.closest('[data-editor-image]') ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT,
-        });
-        while (walker.nextNode()) {
-            const node = walker.currentNode;
-            if (node.nodeType !== 3 && !['IMG', 'BR'].includes(node.tagName) && !node.hasAttribute('data-editor-image')) continue;
-            const length = replyEditorText(node).length;
-            if (offset <= length) {
-                if (node.nodeType === 3) return [node, offset];
-                const index = Array.prototype.indexOf.call(node.parentNode.childNodes, node);
-                return [node.parentNode, index + (offset > 0 ? 1 : 0)];
-            }
-            offset -= length;
-        }
-        return [element.value, element.value.childNodes.length];
-    }
-    range.setStart(...point(start)); range.setEnd(...point(end));
+    range.setStart(...replyEditorPoint(element.value, start)); range.setEnd(...replyEditorPoint(element.value, end));
     const selected = window.getSelection();
     selected.removeAllRanges(); selected.addRange(range);
     selection = { start, end };
