@@ -7,6 +7,7 @@ use App\Models\Mailbox;
 use App\Models\Ticket;
 use App\Services\AutomationEngine;
 use App\Services\DeliveryTracking;
+use App\Services\MobilePush;
 use App\Services\SenderPolicy;
 use App\Services\TicketCustomFields;
 use Carbon\Carbon;
@@ -46,6 +47,10 @@ class ExternalTicketController extends Controller
             Activity::create(['ticket_id' => $ticket->id, 'description' => 'Ticket created through API key “'.$key->name.'”.']);
             app(AutomationEngine::class)->run($ticket, 'ticket.created');
             app(AutomationEngine::class)->run($ticket, 'message.received');
+
+            if (config('mobile.notify_external_tickets') && ! in_array($ticket->fresh()->folder, ['spam', 'trash'], true)) {
+                app(MobilePush::class)->enqueue('ticket:'.$ticket->id, 'new_ticket', (string) $ticket->id);
+            }
 
             return $ticket->fresh();
         }, 5);

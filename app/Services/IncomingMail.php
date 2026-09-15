@@ -105,6 +105,11 @@ class IncomingMail
                     $this->automations->run($ticket, 'message.received');
                 }
 
+                if (! ($data['automated'] ?? false) && ! ($data['historical'] ?? false) && ! in_array($ticket->fresh()->folder, ['spam', 'trash'], true)) {
+                    app(MobilePush::class)->enqueue($existing ? 'reply:'.$message->id : 'ticket:'.$ticket->id,
+                        $existing ? 'new_reply' : 'new_ticket', (string) $ticket->id, occurredAt: $data['received_at'] ?? null);
+                }
+
                 return $ticket;
             });
         } catch (\Throwable $exception) {

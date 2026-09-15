@@ -72,6 +72,7 @@ class SyncMailbox implements ShouldBeUnique, ShouldQueue
                     $attachments[] = ['name' => (string) $attachment->name, 'content' => (string) $attachment->content, 'content_id' => (string) $attachment->id];
                 }
                 $importer->import($mailbox, ['external_id' => $rawId ?: (string) $message->get('relay_import_fingerprint'),
+                    'received_at' => (string) $message->get('relay_received_at') ?: null,
                     'from_email' => $sender->mail, 'from_name' => $sender->personal, 'subject' => (string) $message->get('subject'),
                     'reply_to_email' => $replyTo?->mail ?? '', 'reply_to_name' => $replyTo?->personal ?? '',
                     'body' => $body, 'email_html' => $message->getHTMLBody(), 'references' => $references, 'attachments' => $attachments,

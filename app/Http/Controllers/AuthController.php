@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Models\User;
 use App\Models\WorkspaceSetting;
+use App\Services\MobilePush;
 use Database\Seeders\DatabaseSeeder;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
@@ -71,6 +72,7 @@ class AuthController extends Controller
 
     public function logout(Request $request): JsonResponse|RedirectResponse
     {
+        app(MobilePush::class)->revokeSession($request);
         Auth::logout();
         $request->session()->invalidate();
         $request->session()->regenerateToken();

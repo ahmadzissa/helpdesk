@@ -8,6 +8,7 @@ use App\Http\Controllers\MailboxConnectionController;
 use App\Http\Controllers\MailboxPollingController;
 use App\Http\Controllers\MailPolicyController;
 use App\Http\Controllers\MailSafetyController;
+use App\Http\Controllers\MobileDeviceController;
 use App\Http\Controllers\PageController;
 use App\Http\Controllers\RecoveryController;
 use App\Http\Controllers\TicketController;
@@ -106,4 +107,10 @@ Route::middleware('auth')->group(function () {
     foreach (['settings', 'replies', 'reports', 'profile', 'activity'] as $page) {
         Route::get('/'.$page, [PageController::class, 'show'])->defaults('component', 'Workspace')->defaults('page', $page)->name($page);
     }
+});
+
+Route::prefix('mobile')->controller(MobileDeviceController::class)->group(function () {
+    Route::get('/session', 'session')->middleware('throttle:60,1');
+    Route::post('/device', 'store')->middleware('throttle:30,1');
+    Route::post('/presence', 'presence')->middleware('throttle:120,1');
 });

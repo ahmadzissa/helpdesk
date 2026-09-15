@@ -98,6 +98,7 @@ class ImapInbox
                                 }
                                 $message = Message::fromString($raw, $client->getConfig());
                                 $message->getHeader()->set('relay_import_fingerprint', hash('sha256', $raw).'@relay.import');
+                                $message->getHeader()->set('relay_received_at', $receivedAt->toIso8601String());
                                 $consume($message);
                             }
                         }
