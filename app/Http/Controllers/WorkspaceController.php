@@ -82,6 +82,7 @@ class WorkspaceController extends Controller
         }
         $class = $this->model($type);
         $model = $id ? $class::findOrFail($id) : new $class;
+        $previousImages = $type === 'replies' ? app(CannedImages::class)->ids($model->body ?? '') : [];
         if ($type === 'replies' && is_string($request->input('shortcut'))) {
             $request->merge(['shortcut' => implode(', ', CannedReply::shortcuts($request->input('shortcut')))]);
         }
@@ -189,6 +190,11 @@ class WorkspaceController extends Controller
         if ($type === 'mailboxes') {
             $connections->forget($original, $request->user()->id);
         }
+        if ($type === 'replies') {
+            foreach (array_diff($previousImages, app(CannedImages::class)->ids($model->body)) as $imageId) {
+                app(CannedImages::class)->deleteUnused($imageId);
+            }
+        }
         Activity::create(['user_id' => $request->user()->id, 'description' => ($id ? 'Updated ' : 'Created ').$type.': '.($data['name'] ?? $data['title'])]);
 
         return response()->json($model, $id ? 200 : 201);
@@ -220,6 +226,11 @@ class WorkspaceController extends Controller
             }
         } else {
             $model->delete();
+        }
+        if ($type === 'replies') {
+            foreach (app(CannedImages::class)->ids($model->body) as $imageId) {
+                app(CannedImages::class)->deleteUnused($imageId);
+            }
         }
         Activity::create(['user_id' => $request->user()->id, 'description' => 'Removed '.$type.' #'.$id.($deletedTickets ? ' and permanently deleted '.$deletedTickets.' ticket(s).' : '')]);
 

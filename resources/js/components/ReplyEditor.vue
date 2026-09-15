@@ -2,8 +2,8 @@
 import { ref, watch, onMounted, onBeforeUnmount } from 'vue';
 import { normalizeImagePaste, replyEditorHtml, replyEditorText } from '../replyEditor';
 
-const props = defineProps({ modelValue: { type: String, default: '' }, disabled: Boolean, placeholder: String, expanded: Boolean });
-const emit = defineEmits(['update:modelValue', 'image', 'keydown', 'selection']);
+const props = defineProps({ modelValue: { type: String, default: '' }, disabled: Boolean, placeholder: String, expanded: Boolean, removableImages: Boolean });
+const emit = defineEmits(['update:modelValue', 'image', 'keydown', 'selection', 'delete-image']);
 const element = ref();
 let selection = { start: 0, end: 0 };
 
@@ -21,10 +21,12 @@ function rememberSelection() {
 function setSelectionRange(start, end = start) {
     const range = document.createRange();
     function point(offset) {
-        const walker = document.createTreeWalker(element.value, NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT);
+        const walker = document.createTreeWalker(element.value, NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT, {
+            acceptNode: node => node.parentElement?.closest('[data-editor-image]') ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT,
+        });
         while (walker.nextNode()) {
             const node = walker.currentNode;
-            if (node.nodeType !== 3 && !['IMG', 'BR'].includes(node.tagName)) continue;
+            if (node.nodeType !== 3 && !['IMG', 'BR'].includes(node.tagName) && !node.hasAttribute('data-editor-image')) continue;
             const length = replyEditorText(node).length;
             if (offset <= length) {
                 if (node.nodeType === 3) return [node, offset];
@@ -57,7 +59,7 @@ function sync() {
 
 function render() {
     if (!element.value || replyEditorText(element.value) === props.modelValue) return;
-    element.value.innerHTML = replyEditorHtml(props.modelValue) + '<br data-editor-placeholder="true">';
+    element.value.innerHTML = replyEditorHtml(props.modelValue, props) + '<br data-editor-placeholder="true">';
 }
 
 function insert(text) {
@@ -65,7 +67,7 @@ function insert(text) {
     element.value.focus(); setSelectionRange(selection.start, selection.end);
     // Native insertion keeps typing, pasted images, and deletion in the browser's undo history.
     const caret = selection.start + text.length;
-    document.execCommand('insertHTML', false, replyEditorHtml(text));
+    document.execCommand('insertHTML', false, replyEditorHtml(text, props));
     ensurePlaceholder();
     setSelectionRange(caret);
     sync();
@@ -88,6 +90,7 @@ function drop(event) {
 }
 
 function keydown(event) {
+    if (event.target.closest?.('[data-delete-image]')) return;
     emit('keydown', event);
     if (event.defaultPrevented) return;
     if (event.key === 'Enter' && !event.ctrlKey && !event.metaKey && !event.isComposing) {
@@ -95,9 +98,16 @@ function keydown(event) {
     }
 }
 
+function deleteImage(event) {
+    const button = event.target.closest?.('[data-delete-image]');
+    if (!button) return;
+    event.preventDefault();
+    if (!props.disabled) emit('delete-image', button.dataset.deleteImage);
+}
+
 watch(() => props.modelValue, render, { flush: 'post' });
 onMounted(() => {
-    element.value.innerHTML = replyEditorHtml(props.modelValue) + '<br data-editor-placeholder="true">';
+    element.value.innerHTML = replyEditorHtml(props.modelValue, props) + '<br data-editor-placeholder="true">';
     document.addEventListener('selectionchange', rememberSelection);
 });
 onBeforeUnmount(() => document.removeEventListener('selectionchange', rememberSelection));
@@ -109,7 +119,7 @@ defineExpose({
 </script>
 
 <template>
-    <div ref="element" class="reply-editor visual-reply-editor" :class="{ expanded }" :contenteditable="!disabled" :aria-disabled="disabled" :data-placeholder="placeholder" :data-empty="!modelValue" role="textbox" aria-multiline="true" aria-label="Write a reply" dir="auto" @input="sync" @keydown="keydown" @paste="paste" @dragover.prevent @drop="drop" />
+    <div ref="element" class="reply-editor visual-reply-editor" :class="{ expanded }" :contenteditable="!disabled" :aria-disabled="disabled" :data-placeholder="placeholder" :data-empty="!modelValue" role="textbox" aria-multiline="true" aria-label="Write a reply" dir="auto" @input="sync" @keydown="keydown" @paste="paste" @dragover.prevent @drop="drop" @click="deleteImage" @mousedown="($event.target.closest?.('[data-delete-image]')) && $event.preventDefault()" />
 </template>
 
 <style>
@@ -118,4 +128,8 @@ defineExpose({
 .visual-reply-editor[data-empty="true"]:before{content:attr(data-placeholder);color:var(--muted);pointer-events:none;position:absolute}
 .visual-reply-editor img{display:inline-block;max-width:100%;max-height:190px;width:auto;height:auto;object-fit:contain;vertical-align:middle;border:1px solid var(--line);border-radius:6px;margin:5px 0}
 .visual-reply-editor[aria-disabled="true"]{opacity:.65;cursor:default}
+.visual-reply-editor .editor-image{display:inline-flex;flex-direction:column;align-items:flex-end;max-width:100%;vertical-align:middle;margin:5px 0}
+.visual-reply-editor .editor-image img{margin:3px 0 0}
+.editor-image-delete{display:flex;align-items:center;justify-content:center;width:25px;height:25px;border-radius:5px;background:var(--surface);border:1px solid var(--line);color:var(--status-danger-ink);font-size:20px;line-height:1;cursor:pointer}
+.editor-image-delete:hover{background:var(--status-danger-bg)}
 </style>

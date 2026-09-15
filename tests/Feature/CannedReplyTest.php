@@ -4,10 +4,13 @@ namespace Tests\Feature;
 
 use App\Models\CannedReply;
 use App\Models\Mailbox;
+use App\Models\Message;
 use App\Models\Ticket;
 use App\Models\User;
+use App\Services\CannedImages;
 use App\Services\OutgoingMail;
 use App\Services\WorkflowActions;
+use Illuminate\Filesystem\FilesystemAdapter;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\DB;
@@ -19,6 +22,83 @@ use Tests\TestCase;
 class CannedReplyTest extends TestCase
 {
     use RefreshDatabase;
+
+    public function test_removing_an_image_updates_the_template_and_preserves_existing_ticket_messages(): void
+    {
+        Storage::fake('local');
+        $this->actingAs(User::factory()->create(['role' => 'agent']));
+        $image = $this->post('/api/v1/canned-images', ['image' => UploadedFile::fake()->image('used.png')], ['Accept' => 'application/json'])->assertCreated()->json();
+        $record = DB::table('canned_reply_images')->sole();
+        $body = 'Before '.$image['markdown'].' After';
+        $reply = CannedReply::factory()->create(['body' => $body]);
+        $ticket = Ticket::factory()->create();
+        $message = Message::factory()->create(['ticket_id' => $ticket->id, 'kind' => 'outbound', 'delivery' => 'sent', 'body' => $body]);
+        $this->putJson('/api/v1/tickets/'.$ticket->id.'/draft', ['body' => $body, 'private' => false])->assertSuccessful();
+
+        $this->deleteJson($image['url'])->assertOk()->assertJson(['deleted' => false]);
+        $this->putJson('/api/v1/manage/replies/'.$reply->id, ['title' => $reply->title, 'shortcut' => $reply->shortcut, 'category' => $reply->category, 'body' => 'Updated response'])->assertOk();
+
+        $this->assertSame('Updated response', $reply->fresh()->body);
+        $this->assertSame($body, $message->fresh()->body);
+        $this->getJson('/api/v1/tickets/'.$ticket->id)->assertOk()->assertJsonPath('draft.body', $body);
+        Storage::disk('local')->assertExists($record->path);
+        $this->get($image['url'])->assertOk();
+        $email = new Email;
+        $this->assertStringContainsString('@relay.canned', app(OutgoingMail::class)->html($message, $email));
+    }
+
+    public function test_saving_or_deleting_a_response_removes_unused_image_files_and_database_rows(): void
+    {
+        Storage::fake('local');
+        $this->actingAs(User::factory()->create());
+        foreach (['edit', 'delete'] as $action) {
+            $image = $this->post('/api/v1/canned-images', ['image' => UploadedFile::fake()->image($action.'.png')], ['Accept' => 'application/json'])->assertCreated()->json();
+            $record = DB::table('canned_reply_images')->sole();
+            $reply = CannedReply::factory()->create(['body' => $image['markdown']]);
+            $this->deleteJson($image['url'])->assertOk()->assertJson(['deleted' => false]);
+            if ($action === 'edit') {
+                $this->putJson('/api/v1/manage/replies/'.$reply->id, ['title' => $reply->title, 'shortcut' => $reply->shortcut, 'category' => $reply->category, 'body' => 'No image needed'])->assertOk();
+            } else {
+                $this->deleteJson('/api/v1/manage/replies/'.$reply->id)->assertOk();
+            }
+            Storage::disk('local')->assertMissing($record->path);
+            $this->assertDatabaseMissing('canned_reply_images', ['id' => $record->id]);
+            $this->get($image['url'])->assertNotFound();
+        }
+    }
+
+    public function test_canned_image_deletion_requires_login_and_does_not_delete_other_images(): void
+    {
+        Storage::fake('local');
+        $this->deleteJson('/api/v1/canned-images/00000000-0000-0000-0000-000000000000')->assertUnauthorized();
+        $this->actingAs(User::factory()->create());
+        $this->deleteJson('/api/v1/canned-images/00000000-0000-0000-0000-000000000000')->assertOk()->assertJson(['deleted' => true]);
+        $this->deleteJson('/api/v1/canned-images/invalid')->assertNotFound();
+        $first = $this->post('/api/v1/canned-images', ['image' => UploadedFile::fake()->image('first.png')], ['Accept' => 'application/json'])->assertCreated()->json();
+        $second = $this->post('/api/v1/canned-images', ['image' => UploadedFile::fake()->image('second.png')], ['Accept' => 'application/json'])->assertCreated()->json();
+        $record = DB::table('canned_reply_images')->where('name', 'first.png')->first();
+        $this->deleteJson($first['url'])->assertOk()->assertJson(['deleted' => true]);
+        Storage::disk('local')->assertMissing($record->path);
+        $this->assertDatabaseMissing('canned_reply_images', ['id' => $record->id]);
+        $this->get($second['url'])->assertOk()->assertHeader('Cache-Control', 'no-store, private');
+        $this->assertCount(1, app(CannedImages::class)->images($second['markdown']));
+    }
+
+    public function test_failed_file_deletion_keeps_the_image_database_row(): void
+    {
+        Storage::fake('local');
+        $this->actingAs(User::factory()->create());
+        $image = $this->post('/api/v1/canned-images', ['image' => UploadedFile::fake()->image('retry.png')], ['Accept' => 'application/json'])->assertCreated()->json();
+        $record = DB::table('canned_reply_images')->sole();
+        $disk = \Mockery::mock(FilesystemAdapter::class);
+        $disk->shouldReceive('exists')->once()->with($record->path)->andReturnTrue();
+        $disk->shouldReceive('delete')->once()->with($record->path)->andReturnFalse();
+        Storage::shouldReceive('disk')->with('local')->andReturn($disk);
+
+        $this->deleteJson($image['url'])->assertStatus(500);
+
+        $this->assertDatabaseHas('canned_reply_images', ['id' => $record->id, 'path' => $record->path]);
+    }
 
     public function test_agents_can_save_edit_and_find_comma_separated_shortcuts_with_spaces(): void
     {

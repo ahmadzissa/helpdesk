@@ -54,6 +54,7 @@ Route::prefix('api/v1')->group(function () {
         Route::get('inline-images/{id}', [TicketWorkflowController::class, 'image'])->whereUuid('id');
         Route::post('canned-images', [CannedImageController::class, 'store'])->middleware('throttle:30,1');
         Route::get('canned-images/{id}', [CannedImageController::class, 'show'])->whereUuid('id');
+        Route::delete('canned-images/{id}', [CannedImageController::class, 'destroy'])->whereUuid('id');
         Route::get('messages/{message}/delivery', [TicketWorkflowController::class, 'delivery']);
         Route::post('logout', [AuthController::class, 'logout']);
         Route::patch('profile', [AuthController::class, 'profile']);

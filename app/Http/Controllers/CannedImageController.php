@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Services\CannedImages;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -33,6 +34,11 @@ class CannedImageController extends Controller
         $image = DB::table('canned_reply_images')->where('id', $id)->first();
         abort_unless($image && Storage::disk('local')->exists($image->path), 404);
 
-        return Storage::disk('local')->response($image->path, $image->name, ['Content-Type' => $image->mime, 'X-Content-Type-Options' => 'nosniff', 'Cache-Control' => 'private, max-age=86400', 'Content-Security-Policy' => "default-src 'none'; sandbox"], 'inline');
+        return Storage::disk('local')->response($image->path, $image->name, ['Content-Type' => $image->mime, 'X-Content-Type-Options' => 'nosniff', 'Cache-Control' => 'private, no-store', 'Content-Security-Policy' => "default-src 'none'; sandbox"], 'inline');
+    }
+
+    public function destroy(string $id): JsonResponse
+    {
+        return response()->json(['deleted' => app(CannedImages::class)->deleteUnused($id)]);
     }
 }
