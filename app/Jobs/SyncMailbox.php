@@ -62,8 +62,7 @@ class SyncMailbox implements ShouldBeUnique, ShouldQueue
                     $html = preg_replace('/<(script|style)\b[^>]*>.*?<\/\1>/is', '', $message->getHTMLBody());
                     $body = html_entity_decode(strip_tags(str_replace(['<br>', '<br/>', '<br />', '</p>', '</div>'], "\n", $html)), ENT_QUOTES | ENT_HTML5, 'UTF-8');
                 }
-                $references = (string) $message->get('references').' '.(string) $message->get('in_reply_to');
-                preg_match_all('/<([^>]+)>/', $references, $matches);
+                $references = preg_split('/[\s,<>]+/', (string) $message->get('references').' '.(string) $message->get('in_reply_to'), -1, PREG_SPLIT_NO_EMPTY);
                 $auto = strtolower((string) $message->get('auto_submitted'));
                 $precedence = strtolower((string) $message->get('precedence'));
                 $attachments = [];
@@ -72,7 +71,7 @@ class SyncMailbox implements ShouldBeUnique, ShouldQueue
                 }
                 $importer->import($mailbox, ['external_id' => $rawId ?: (string) $message->get('relay_import_fingerprint'),
                     'from_email' => $sender->mail, 'from_name' => $sender->personal, 'subject' => (string) $message->get('subject'),
-                    'body' => $body, 'email_html' => $message->getHTMLBody(), 'references' => $matches[1], 'attachments' => $attachments,
+                    'body' => $body, 'email_html' => $message->getHTMLBody(), 'references' => $references, 'attachments' => $attachments,
                     'automated' => $reports->isReport($message) || ($auto !== '' && $auto !== 'no') || in_array($precedence, ['bulk', 'list', 'junk'])]);
             });
             $mailbox->update(['last_synced_at' => $started, 'sync_status' => 'idle', 'sync_error' => null]);

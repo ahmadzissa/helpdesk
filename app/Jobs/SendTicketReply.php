@@ -49,6 +49,7 @@ class SendTicketReply implements ShouldQueue
                 $parent = app(OutgoingMail::class)->previousMessage($this->message);
                 if ($parent?->external_id) {
                     $email->getHeaders()->addIdHeader('In-Reply-To', $parent->external_id);
+                    $email->getHeaders()->addIdHeader('References', $parent->external_id);
                 }
                 if ($this->message->rule_name) {
                     $email->getHeaders()->addTextHeader('Auto-Submitted', 'auto-replied');

@@ -76,6 +76,7 @@ class OutgoingMailTest extends TestCase
         $this->assertSame('inline', $logo->getDisposition());
         $this->assertSame(hash_file('sha256', public_path('areviews-logo.png')), hash('sha256', base64_decode($logo->bodyToString())));
         $this->assertStringContainsString('original@example.com', $sent->getHeaders()->get('In-Reply-To')->getBodyAsString());
+        $this->assertSame(['original@example.com'], $sent->getHeaders()->get('References')?->getIds());
         $this->assertSame('auto-replied', $sent->getHeaders()->get('Auto-Submitted')->getBodyAsString());
         $this->assertSame('sent', $message->fresh()->delivery);
         $this->assertNotNull($message->fresh()->external_id);

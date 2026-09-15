@@ -13,6 +13,7 @@ use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Storage;
 use Mockery;
+use PHPUnit\Framework\Attributes\DataProvider;
 use RuntimeException;
 use Tests\TestCase;
 use Webklex\PHPIMAP\Client;
@@ -82,6 +83,39 @@ class IncrementalMailSyncTest extends TestCase
     private function runSync(Mailbox $mailbox, ImapInbox $inbox): void
     {
         (new SyncMailbox($mailbox->id))->handle(app(IncomingMail::class), $inbox);
+    }
+
+    /** @return array<string, array{string}> */
+    public static function replyHeaders(): array
+    {
+        return [
+            'in reply to only' => ["In-Reply-To: <original@example.com>\r\n"],
+            'references only' => ["References: <original@example.com>\r\n"],
+            'multiple references' => ["References: <unrelated@example.com> <original@example.com> <unknown@example.com>\r\n"],
+            'folded references' => ["References: <unrelated@example.com>\r\n\t<original@example.com>\r\n"],
+            'both headers' => ["References: <unrelated@example.com> <original@example.com>\r\nIn-Reply-To: <original@example.com>\r\n"],
+        ];
+    }
+
+    #[DataProvider('replyHeaders')]
+    public function test_raw_email_reply_headers_keep_the_existing_ticket_without_a_visible_id(string $headers): void
+    {
+        $mailbox = $this->mailbox();
+        $ticket = Ticket::factory()->create(['mailbox_id' => $mailbox->id, 'requester_email' => 'customer@example.com', 'status' => 'Pending']);
+        Message::factory()->create(['ticket_id' => $ticket->id, 'mailbox_id' => $mailbox->id, 'external_id' => 'original@example.com', 'kind' => 'outbound', 'delivery' => 'sent']);
+        Message::factory()->create(['external_id' => 'unrelated@example.com']);
+        [$inbox, $protocol] = $this->inbox(2);
+        $protocol->shouldReceive('search')->once()->andReturn($this->response([1]));
+        $this->expectDates($protocol, [1], [1 => '11-Sep-2026 10:01:00 +0000']);
+        $protocol->shouldReceive('fetch')->once()->with(['UID', 'BODY.PEEK[]'], [1])
+            ->andReturn($this->response([1 => ['BODY[]' => $headers.$this->mail('reply@example.com', 'Re: Follow-up question')]]));
+
+        $this->runSync($mailbox, $inbox);
+
+        $this->assertDatabaseCount('tickets', 2);
+        $this->assertDatabaseHas('messages', ['external_id' => 'reply@example.com', 'ticket_id' => $ticket->id]);
+        $this->assertSame('Open', $ticket->fresh()->status);
+        $this->assertSame(2, $ticket->messages()->count());
     }
 
     public function test_format_recovery_reads_exact_existing_message_without_advancing_import_cursor(): void
