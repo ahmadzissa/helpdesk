@@ -118,6 +118,36 @@ class IncrementalMailSyncTest extends TestCase
         $this->assertSame('idle', $mailbox->fresh()->sync_status);
     }
 
+    public function test_html_bot_email_with_bare_reply_to_address_is_imported(): void
+    {
+        $mailbox = $this->mailbox();
+        [$inbox, $protocol] = $this->inbox(2);
+        $protocol->shouldReceive('search')->once()->andReturn($this->response([1]));
+        $this->expectDates($protocol, [1], [1 => '15-Sep-2026 13:54:19 +0000']);
+        $raw = "Return-path: <support@example.com>\r\n"
+            ."Envelope-to: support@example.com\r\n"
+            ."From: support@example.com\r\n"
+            ."Reply-To: customer@hotmail.com\r\n"
+            ."To: Admin <support@example.com>\r\n"
+            ."Subject: Message: (Bot) Areviews support request | Plan: \r\n"
+            ."Message-ID: <bot-request@example.com>\r\n"
+            ."MIME-Version: 1.0\r\n"
+            ."Date: Tue, 15 Sep 2026 13:54:19 +0000\r\n"
+            ."Content-Type: text/html; charset=utf-8\r\n"
+            ."Content-Transfer-Encoding: quoted-printable\r\n\r\n"
+            .quoted_printable_encode('<!doctype html><html><body><p>Name: Customer<br>Email: customer@hotmail.com</p><p>How to import reviews.</p></body></html>');
+        $protocol->shouldReceive('fetch')->once()->with(['UID', 'BODY.PEEK[]'], [1])
+            ->andReturn($this->response([1 => ['BODY[]' => $raw]]));
+
+        $this->runSync($mailbox, $inbox);
+
+        $this->assertDatabaseHas('tickets', ['requester_email' => 'customer@hotmail.com', 'status' => 'Open', 'folder' => 'inbox']);
+        $this->assertDatabaseHas('messages', ['external_id' => 'bot-request@example.com', 'author_email' => 'customer@hotmail.com']);
+        $this->assertStringContainsString('How to import reviews.', Message::firstOrFail()->body);
+        $this->assertStringContainsString('<html>', Message::firstOrFail()->email_html);
+        $this->assertSame('idle', $mailbox->fresh()->sync_status);
+    }
+
     /** @return array<string, array{string}> */
     public static function replyHeaders(): array
     {
