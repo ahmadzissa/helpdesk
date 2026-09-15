@@ -2,7 +2,7 @@
     <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="#f2f5f8" style="width:100%;border-collapse:collapse">
         <tr>
             <td align="center" style="padding:28px 14px">
-                <table role="presentation" width="600" cellpadding="0" cellspacing="0" border="0" style="width:100%;max-width:600px;border-collapse:collapse">
+                <table role="presentation" width="600" cellpadding="0" cellspacing="0" border="0" style="width:100%;max-width:600px;table-layout:fixed;border-collapse:collapse">
                     <tr>
                         <td align="center" style="padding:0 0 24px;text-align:center">
                             <img src="cid:areviews-logo@relay.brand" width="36" height="40" alt="Areviews" style="display:block;margin:0 auto;border:0;width:36px;height:40px">
@@ -17,7 +17,7 @@
                         <tr class="gmail_quote">
                             <td style="padding:22px 0 0 18px">
                                 <div style="margin:0 0 12px;color:#646b79;font-size:11px;font-weight:700;letter-spacing:1.5px">PREVIOUS MESSAGE</div>
-                                <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+                                <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="width:100%;table-layout:fixed">
                                     <tr>
                                         <td bgcolor="#f6f3fc" style="padding:20px 24px;border:1px solid #e1e6ee;border-radius:14px 14px 0 14px;background-color:#f6f3fc;overflow-wrap:anywhere;word-break:break-word">
                                             <p dir="auto" style="margin:0 0 12px;font-size:12px;font-weight:700;color:#646b79">{{ $previousAttribution }}</p>

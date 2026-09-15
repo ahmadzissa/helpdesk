@@ -193,6 +193,10 @@ class EmailContent
                 $styles[$property] = $property.':'.$value;
             }
         }
+        if ($tag === 'img') {
+            $styles['max-width'] = 'max-width:100%';
+            $styles['height'] = 'height:auto';
+        }
         if ($styles !== []) {
             $element->setAttribute('style', implode(';', $styles));
         }

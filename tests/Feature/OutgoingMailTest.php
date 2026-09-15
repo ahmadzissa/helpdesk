@@ -51,6 +51,32 @@ class OutgoingMailTest extends TestCase
         $this->assertStringNotContainsString('href="https://example.com/code"', $html);
     }
 
+    public function test_reply_and_quoted_images_have_responsive_sizing_in_the_delivered_email(): void
+    {
+        $previous = Message::factory()->create(['kind' => 'inbound']);
+        $previous->forceFill(['email_html' => '<p><img src="https://example.com/large.png" width="1600" height="900" style="width:1600px;height:900px;color:red"></p>'])->save();
+        $message = Message::factory()->create(['ticket_id' => $previous->ticket_id, 'kind' => 'outbound',
+            'body' => '![Screenshot](https://example.com/reply.png)']);
+
+        $html = app(OutgoingMail::class)->html($message, new Email);
+
+        $document = new \DOMDocument;
+        $document->loadHTML($html);
+        $images = (new \DOMXPath($document))->query('//img[starts-with(@src, "https://example.com/")]');
+        $this->assertCount(2, $images);
+        foreach ($images as $image) {
+            $style = $image->getAttribute('style');
+            $this->assertStringContainsString('max-width:100%', $style);
+            $this->assertStringContainsString('height:auto', $style);
+            $this->assertStringNotContainsString('height:900px', $style);
+            $table = (new \DOMXPath($document))->query('ancestor::table[1]', $image)->item(0);
+            $this->assertStringContainsString('table-layout:fixed', $table->getAttribute('style'));
+        }
+        $logo = (new \DOMXPath($document))->query('//img[starts-with(@src, "cid:areviews-logo")]')->item(0);
+        $this->assertSame('36', $logo->getAttribute('width'));
+        $this->assertSame('40', $logo->getAttribute('height'));
+    }
+
     public function test_reply_transport_builds_safe_multipart_email_and_thread_headers(): void
     {
         $box = Mailbox::factory()->create(['email' => 'support@example.com', 'smtp_host' => 'smtp.example.com', 'sending_enabled' => true]);

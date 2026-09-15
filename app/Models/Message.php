@@ -8,6 +8,7 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Support\Str;
+use League\CommonMark\Extension\CommonMark\Node\Inline\Image;
 use League\CommonMark\Extension\CommonMark\Node\Inline\Link;
 use League\CommonMark\Extension\DefaultAttributes\DefaultAttributesExtension;
 
@@ -30,11 +31,14 @@ class Message extends Model
             'allow_unsafe_links' => false,
             'renderer' => ['soft_break' => '<br />'],
             'autolink' => ['default_protocol' => 'https'],
-            'default_attributes' => ['attributes' => [Link::class => [
-                'style' => 'color:#0057d9;text-decoration:underline',
-                'target' => '_blank',
-                'rel' => 'noopener noreferrer',
-            ]]],
+            'default_attributes' => ['attributes' => [
+                Link::class => [
+                    'style' => 'color:#0057d9;text-decoration:underline',
+                    'target' => '_blank',
+                    'rel' => 'noopener noreferrer',
+                ],
+                Image::class => ['style' => 'max-width:100%;height:auto'],
+            ]],
         ], [new DefaultAttributesExtension]);
     }
 
