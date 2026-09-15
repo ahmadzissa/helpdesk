@@ -10,6 +10,8 @@ use App\Models\User;
 use App\Services\IncomingMail;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\UploadedFile;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\Storage;
@@ -199,6 +201,57 @@ class TicketWorkflowTest extends TestCase
         $otherTicket = Ticket::factory()->create();
         $this->postJson('/api/v1/tickets/'.$otherTicket->id.'/messages', ['body' => $image['markdown']])->assertUnprocessable();
         $this->post('/api/v1/tickets/'.$ticket->id.'/inline-images', ['image' => UploadedFile::fake()->createWithContent('evil.svg', '<svg onload="alert(1)"/>')], ['Accept' => 'application/json'])->assertUnprocessable();
+    }
+
+    public function test_image_urls_reuse_existing_images_without_uploading_and_embed_them_for_recipients(): void
+    {
+        Queue::fake();
+        Http::fake();
+        Storage::fake('local');
+        config(['app.url' => 'https://helpdesk.areviewsapp.com']);
+        $user = User::factory()->create();
+        $other = User::factory()->create();
+        $box = Mailbox::factory()->create(['sending_enabled' => true, 'smtp_host' => 'smtp.example.com']);
+        $ticket = Ticket::factory()->create(['mailbox_id' => $box->id]);
+        $image = $this->actingAs($user)->post('/api/v1/tickets/'.$ticket->id.'/inline-images', ['image' => UploadedFile::fake()->image('example.png', 20, 20)], ['Accept' => 'application/json'])->assertCreated()->json();
+        $this->postJson('/api/v1/tickets/'.$ticket->id.'/messages', ['body' => $image['markdown']])->assertOk();
+        $original = DB::table('inline_images')->where('id', $image['id'])->first();
+        $files = Storage::disk('local')->allFiles();
+        $destination = Ticket::factory()->create(['mailbox_id' => $box->id]);
+        $url = config('app.url').$image['url'];
+        $remote = 'https://example.com/photo.png?a=1&b=2';
+        $body = '![Existing screenshot](<'.$url.'>)'."\n".'![Public image](<'.$remote.'>)';
+        $this->actingAs($other)->postJson('/api/v1/tickets/'.$destination->id.'/messages', ['body' => $body])->assertOk();
+        $message = $destination->messages()->firstOrFail();
+        $this->assertStringContainsString('src="'.$url.'"', Message::renderBody($message->body, 'outbound'));
+        $this->assertDatabaseCount('inline_images', 1);
+        $this->assertSame($original->message_id, DB::table('inline_images')->where('id', $image['id'])->value('message_id'));
+        $this->assertSame($files, Storage::disk('local')->allFiles());
+        $mailer = app('mail.manager')->mailer('array');
+        Mail::shouldReceive('build')->once()->andReturn($mailer);
+        (new SendTicketReply($message))->handle();
+        $sent = $mailer->getSymfonyTransport()->messages()->first()->getOriginalMessage();
+        $this->assertStringContainsString('src="cid:'.$image['id'].'@relay.inline"', $sent->getHtmlBody());
+        $this->assertStringContainsString('src="https://example.com/photo.png?a=1&amp;b=2"', $sent->getHtmlBody());
+        $this->assertStringNotContainsString($url, $sent->getHtmlBody());
+        $this->assertCount(1, array_filter($sent->getAttachments(), fn ($part) => $part->getContentId() === $image['id'].'@relay.inline'));
+        Http::assertNothingSent();
+    }
+
+    public function test_image_links_cannot_reuse_another_agents_private_upload_or_a_missing_image(): void
+    {
+        Queue::fake();
+        Storage::fake('local');
+        config(['app.url' => 'https://helpdesk.areviewsapp.com']);
+        $user = User::factory()->create();
+        $ticket = Ticket::factory()->create();
+        $image = $this->actingAs($user)->post('/api/v1/tickets/'.$ticket->id.'/inline-images', ['image' => UploadedFile::fake()->image('private.png', 20, 20)], ['Accept' => 'application/json'])->assertCreated()->json();
+        $body = '![Private](<'.config('app.url').$image['url'].'>)';
+        $this->actingAs(User::factory()->create())->postJson('/api/v1/tickets/'.$ticket->id.'/messages', ['body' => $body])->assertUnprocessable();
+        $this->assertDatabaseCount('messages', 0);
+        Storage::disk('local')->delete(DB::table('inline_images')->where('id', $image['id'])->value('path'));
+        $this->actingAs($user)->postJson('/api/v1/tickets/'.$ticket->id.'/messages', ['body' => $body])->assertUnprocessable();
+        $this->assertDatabaseCount('messages', 0);
     }
 
     public function test_cancelled_follow_up_never_creates_a_message(): void

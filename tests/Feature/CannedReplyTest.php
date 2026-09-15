@@ -165,6 +165,24 @@ class CannedReplyTest extends TestCase
         $this->assertCount(1, array_filter($email->getAttachments(), fn ($part) => $part->getFilename() === 'guide.png'));
     }
 
+    public function test_canned_image_links_embed_existing_files_and_external_lookalike_urls_stay_external(): void
+    {
+        Storage::fake('local');
+        config(['app.url' => 'https://helpdesk.areviewsapp.com']);
+        $this->actingAs(User::factory()->create());
+        $image = $this->post('/api/v1/canned-images', ['image' => UploadedFile::fake()->image('guide.png')], ['Accept' => 'application/json'])->assertCreated()->json();
+        $url = config('app.url').$image['url'];
+        $external = 'https://example.com'.$image['url'];
+        $body = '![Guide](<'.$url.'>) ![External](<'.$external.'>)';
+        $message = Message::factory()->create(['kind' => 'outbound', 'body' => $body]);
+        $email = new Email;
+        $html = app(OutgoingMail::class)->html($message, $email);
+        $this->assertStringContainsString('src="cid:'.DB::table('canned_reply_images')->sole()->id.'@relay.canned"', $html);
+        $this->assertStringContainsString('src="'.$external.'"', $html);
+        $this->assertCount(0, app(CannedImages::class)->images('![External](<'.$external.'>)'));
+        $this->assertDatabaseCount('canned_reply_images', 1);
+    }
+
     public function test_canned_images_work_in_automated_replies(): void
     {
         Queue::fake();

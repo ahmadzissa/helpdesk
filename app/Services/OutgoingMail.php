@@ -134,14 +134,26 @@ class OutgoingMail
                 $part->setContentId($cid);
                 $email->addPart($part);
             }
-            $html = str_replace('/api/v1/canned-images/'.$image->id, 'cid:'.$cid, $html);
+            $path = '/api/v1/canned-images/'.$image->id;
+            $html = str_replace(['src="'.$path.'"', 'src="'.e(rtrim(config('app.url'), '/').$path).'"'], 'src="cid:'.$cid.'"', $html);
         }
         foreach (DB::table('inline_images')->where('message_id', $message->id)->get() as $image) {
             $cid = $image->id.'@relay.inline';
-            $part = DataPart::fromPath(Storage::disk('local')->path($image->path), $image->name, $image->mime)->asInline();
-            $part->setContentId($cid);
-            $email->addPart($part);
-            $html = str_replace('/api/v1/inline-images/'.$image->id, 'cid:'.$cid, $html);
+            if (! collect($email->getAttachments())->contains(fn (DataPart $part): bool => $part->hasContentId() && $part->getContentId() === $cid)) {
+                $part = DataPart::fromPath(Storage::disk('local')->path($image->path), $image->name, $image->mime)->asInline();
+                $part->setContentId($cid);
+                $email->addPart($part);
+            }
+            $html = str_replace('src="/api/v1/inline-images/'.$image->id.'"', 'src="cid:'.$cid.'"', $html);
+        }
+        foreach ($message->kind === 'inbound' ? [] : app(InlineImages::class)->linkedImages($message->body, $message->user_id) as $source => $image) {
+            $cid = $image->id.'@relay.inline';
+            if (! collect($email->getAttachments())->contains(fn (DataPart $part): bool => $part->hasContentId() && $part->getContentId() === $cid)) {
+                $part = DataPart::fromPath(Storage::disk('local')->path($image->path), $image->name, $image->mime)->asInline();
+                $part->setContentId($cid);
+                $email->addPart($part);
+            }
+            $html = str_replace('src="'.$source.'"', 'src="cid:'.$cid.'"', $html);
         }
         foreach ($message->attachments ?? [] as $index => $file) {
             $path = '/api/v1/attachments/'.$message->id.'/'.$index.'/inline';

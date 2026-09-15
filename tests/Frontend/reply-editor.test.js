@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { normalizeImagePaste, replyEditorHtml, replyEditorText, replyEditorOffset, replyEditorPoint, removeCannedImage, removedCannedImageIds } from '../../resources/js/replyEditor.js';
+import { imageLink, normalizeImagePaste, replyEditorHtml, replyEditorText, replyEditorOffset, replyEditorPoint, removeCannedImage, removedCannedImageIds } from '../../resources/js/replyEditor.js';
 import { setAppBasePath } from '../../resources/js/urls.js';
 
 const image = '![Image](/api/v1/inline-images/3d4e9de1-0187-4887-9c77-1b004f3d98a4)';
@@ -106,7 +106,29 @@ test('pasted escaped image syntax and encoded spaces are repaired without interp
     assert.equal(normalizeImagePaste('literal &#x20; without an image'), 'literal &#x20; without an image');
     assert.equal(replyEditorHtml('<script>alert(1)</script> & text'), '&lt;script&gt;alert(1)&lt;/script&gt; &amp; text');
     assert.ok(!replyEditorHtml('![Image](javascript:alert(1))').includes('<img'));
-    assert.ok(!replyEditorHtml('![Image](https://example.com/photo.png)').includes('<img'));
+    assert.ok(replyEditorHtml('![Image](https://example.com/photo.png)').includes('<img'));
     const html = replyEditorHtml(image.replace('Image', '" onerror="alert(1)'));
     assert.ok(html.includes('alt="&quot; onerror=&quot;alert(1)"'));
+});
+
+test('image links render directly and survive editing without becoming uploads or local paths', () => {
+    setAppBasePath('/helpdesk/public');
+    const url = 'https://helpdesk.areviewsapp.com/api/v1/inline-images/069cd3b3-0903-4379-89ed-e0d90227133a';
+    const markdown = imageLink(url);
+    assert.equal(normalizeImagePaste(url), markdown);
+    assert.ok(replyEditorHtml(markdown).includes('src="' + url + '"'));
+    assert.equal(replyEditorText(elementNode('IMG', { 'data-markdown': markdown })), markdown);
+    const remote = imageLink('https://example.com/photo(1).png?a=1&b=2', 'Screenshot');
+    assert.ok(replyEditorHtml(remote).includes('src="https://example.com/photo(1).png?a=1&amp;b=2"'));
+    assert.equal(normalizeImagePaste('https://example.com/page'), 'https://example.com/page');
+    assert.deepEqual(removedCannedImageIds(imageLink('https://example.com/api/v1/canned-images/3d4e9de1-0187-4887-9c77-1b004f3d98a4'), ''), []);
+    setAppBasePath('');
+});
+
+test('image link insertion rejects executable URLs and escapes image descriptions', () => {
+    for (const url of ['javascript:alert(1)', 'data:image/svg+xml,test', 'file:///secret', '//example.com/photo.png', 'https://user:password@example.com/p.png', 'https://example.com/a b.png', 'https://example.com/"onerror="bad']) {
+        assert.throws(() => imageLink(url));
+        assert.ok(!replyEditorHtml(`![Image](<${url}>)`).includes('<img'));
+    }
+    assert.ok(replyEditorHtml(imageLink('https://example.com/photo.png', '" onerror="alert(1)')).includes('alt="&quot; onerror=&quot;alert(1)"'));
 });

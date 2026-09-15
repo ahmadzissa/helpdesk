@@ -1,6 +1,6 @@
 <script setup>
 defineProps({ disabled: Boolean, uploadingImage: Boolean });
-defineEmits(['format', 'insert', 'link', 'image']);
+defineEmits(['format', 'insert', 'link', 'image', 'image-url']);
 </script>
 
 <template>
@@ -15,5 +15,6 @@ defineEmits(['format', 'insert', 'link', 'image']);
         <span class="divider" />
         <button type="button" :disabled="disabled" @click="$emit('link')" title="Insert link" aria-label="Insert link"><Icon name="link" :size="15" /></button>
         <button type="button" :disabled="disabled || uploadingImage" @click="$emit('image')" title="Insert image" aria-label="Insert image"><Icon :name="uploadingImage ? 'loader' : 'image'" :size="15" /></button>
+        <button type="button" :disabled="disabled" @click="$emit('image-url')" title="Insert image from URL" aria-label="Insert image from URL">Image URL</button>
     </div>
 </template>

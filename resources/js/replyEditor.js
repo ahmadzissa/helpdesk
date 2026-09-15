@@ -1,8 +1,28 @@
 import { appUrl } from './urls.js';
 
-const imagePattern = /!\[([^\]\r\n]*)\]\((\/api\/v1\/(?:inline-images|canned-images)\/[a-f0-9-]{36})\)/gi;
+const imagePattern = /!\[([^\]\r\n]*)\]\((<[^<>\r\n]+>|[^\s()]+)\)/gi;
+
+export function imageLink(address, label = 'Image') {
+    const url = address.trim();
+    let parsed;
+    try { parsed = new URL(url); } catch { throw new Error('Enter a complete https:// or http:// image URL.'); }
+    if (!['https:', 'http:'].includes(parsed.protocol) || parsed.username || parsed.password || /[\s<>"\\\u0000-\u001f]/u.test(url)) {
+        throw new Error('Use an https:// or http:// image URL without spaces or credentials.');
+    }
+    const name = label.trim().replace(/[\[\]\\\r\n]/g, ' ') || 'Image';
+    return `![${name}](<${url}>)`;
+}
+
+function imageSource(destination) {
+    const url = destination.replace(/^<|>$/g, '');
+    if (/^\/api\/v1\/(?:inline-images|canned-images)\/[a-f0-9-]{36}$/i.test(url)) return appUrl(url);
+    try { imageLink(url); return url; } catch { return null; }
+}
 
 export function normalizeImagePaste(text) {
+    if (/^https?:\/\/\S+(?:\.(?:png|jpe?g|gif|webp|avif)|\/api\/v1\/(?:inline-images|canned-images)\/[a-f0-9-]{36})(?:[?#]\S*)?$/i.test(text.trim())) {
+        try { return imageLink(text); } catch { return text; }
+    }
     const normalized = text.replace(/\\(!\[[^\]\r\n]*\]\(\/api\/v1\/(?:inline-images|canned-images)\/[a-f0-9-]{36}\))/gi, '$1');
     return /!\[[^\]\r\n]*\]\(\/api\/v1\/(?:inline-images|canned-images)\/[a-f0-9-]{36}\)/i.test(normalized)
         ? normalized.replace(/&#(?:x20|32);/gi, ' ')
@@ -73,7 +93,7 @@ export function removeCannedImage(text, id) {
 
 export function cannedImageIds(text) {
     return [...new Set([...text.matchAll(imagePattern)]
-        .filter(match => match[2].toLowerCase().includes('/canned-images/'))
+        .filter(match => match[2].toLowerCase().startsWith('/api/v1/canned-images/'))
         .map(match => match[2].split('/').at(-1).toLowerCase()))];
 }
 
@@ -86,8 +106,14 @@ export function replyEditorHtml(text, { removableImages = false } = {}) {
     let html = '', offset = 0;
     for (const match of text.matchAll(imagePattern)) {
         html += inlineHtml(text.slice(offset, match.index));
-        const img = `<img src="${escapeHtml(appUrl(match[2]))}" alt="${escapeHtml(match[1])}" data-markdown="${escapeHtml(match[0])}" contenteditable="false" draggable="false">`;
-        html += removableImages && match[2].includes('/canned-images/')
+        const source = imageSource(match[2]);
+        if (!source) {
+            html += inlineHtml(match[0]);
+            offset = match.index + match[0].length;
+            continue;
+        }
+        const img = `<img src="${escapeHtml(source)}" alt="${escapeHtml(match[1])}" data-markdown="${escapeHtml(match[0])}" contenteditable="false" draggable="false" referrerpolicy="no-referrer">`;
+        html += removableImages && match[2].startsWith('/api/v1/canned-images/')
             ? `<span class="editor-image" data-editor-image="true" data-markdown="${escapeHtml(match[0])}" contenteditable="false"><button type="button" class="editor-image-delete" data-delete-image="${match[2].split('/').at(-1)}" aria-label="Remove image" title="Remove image">×</button>${img}</span>`
             : img;
         offset = match.index + match[0].length;

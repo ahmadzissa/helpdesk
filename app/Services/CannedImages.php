@@ -11,6 +11,8 @@ class CannedImages
     /** @return list<string> */
     public function ids(string $body): array
     {
+        $prefix = rtrim(config('app.url'), '/');
+        $body = preg_replace_callback('~https?://[^\s<>"\x27]+~i', fn (array $match): string => str_starts_with($match[0], $prefix.'/api/v1/canned-images/') ? substr($match[0], strlen($prefix)) : '', $body);
         preg_match_all('~/api/v1/canned-images/([a-f0-9-]{36})~i', $body, $matches);
 
         return array_values(array_unique(array_map('strtolower', $matches[1])));

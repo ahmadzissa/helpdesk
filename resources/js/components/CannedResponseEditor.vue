@@ -5,6 +5,7 @@ import { cannedImageIds, removeCannedImage, removedCannedImageIds } from '../rep
 import { replyFormat, replyLink } from '../replyFormatting';
 import ReplyEditor from './ReplyEditor.vue';
 import ReplyFormattingToolbar from './ReplyFormattingToolbar.vue';
+import ImageLinkDialog from './ImageLinkDialog.vue';
 
 const props = defineProps({ modelValue: { type: String, default: '' }, disabled: Boolean });
 const emit = defineEmits(['update:modelValue', 'uploading']);
@@ -12,6 +13,8 @@ const editor = ref(), imageInput = ref(), uploading = ref(false), error = ref(''
 const deletingImage = ref(false), imageNotice = ref('');
 const cleanupFailed = ref(false), pendingImageRemovals = new Set();
 const linkOpen = ref(false), linkLabel = ref(''), linkAddress = ref('');
+const imageLinkOpen = ref(false);
+function insertImageLink(markdown) { insert('\n' + markdown + '\n'); imageLinkOpen.value = false; }
 let linkSelection = { start: 0, end: 0 };
 
 watch([uploading, deletingImage], () => emit('uploading', uploading.value || deletingImage.value), { flush: 'sync' });
@@ -81,12 +84,12 @@ async function cleanupImages() {
         <span class="canned-message-label">Message</span>
         <div class="canned-composer">
             <ReplyEditor ref="editor" :model-value="modelValue" @update:model-value="$emit('update:modelValue', $event)" :disabled="disabled || uploading || deletingImage" placeholder="Enter canned response text…" aria-label="Canned response message" expanded removable-images @image="uploadImage" @delete-image="deleteImage" />
-            <ReplyFormattingToolbar :disabled="disabled || uploading || deletingImage" :uploading-image="uploading" @format="format" @insert="insert" @link="openLink" @image="imageInput.click()" />
+            <ReplyFormattingToolbar :disabled="disabled || uploading || deletingImage" :uploading-image="uploading" @format="format" @insert="insert" @link="openLink" @image="imageInput.click()" @image-url="imageLinkOpen = true" />
         </div>
         <input ref="imageInput" type="file" accept="image/png,image/jpeg,image/gif,image/webp" hidden @change="uploadImage($event.target.files[0])" />
         <p v-if="uploading" class="form-description" role="status">Uploading image…</p>
         <p v-else-if="deletingImage" class="form-description" role="status">Deleting image…</p>
-        <p v-else class="form-description">Paste, drop, or upload an image to display it in your response. PNG, JPEG, GIF or WebP, up to 5 MB each.</p>
+        <p v-else class="form-description">Use Image URL to display an image from a link, or paste, drop, or upload a PNG, JPEG, GIF or WebP up to 5 MB.</p>
         <p v-if="error" class="error-message" role="alert">{{ error }}</p>
         <button v-if="cleanupFailed" type="button" class="text-button" :disabled="disabled || uploading || deletingImage" @click="cleanupImages">Retry image cleanup</button>
         <p v-if="imageNotice" class="form-description" role="status">{{ imageNotice }}</p>
@@ -97,6 +100,7 @@ async function cleanupImages() {
         </div>
         <div class="variable-options"><span>Insert a variable</span><button v-for="variable in ['name', 'email', 'ticket_id', 'subject', 'agent']" :key="variable" type="button" :disabled="disabled || uploading || deletingImage" @click="insert('{{' + variable + '}}')">{{ ['{', '{', variable, '}', '}'].join('') }}</button></div>
     </div>
+    <ImageLinkDialog v-if="imageLinkOpen" @close="imageLinkOpen = false" @insert="insertImageLink" />
 </template>
 
 <style>
