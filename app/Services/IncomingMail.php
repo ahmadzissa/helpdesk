@@ -34,7 +34,6 @@ class IncomingMail
             }
             $email = $replyToEmail;
             $data['from_name'] = $headers->decode($data['reply_to_name'] ?? '');
-            $data['automated'] = true;
         }
         $externalId = mb_substr($data['external_id'], 0, 255);
         if (Message::where('mailbox_id', $mailbox->id)->where('external_id', $externalId)->exists()) {

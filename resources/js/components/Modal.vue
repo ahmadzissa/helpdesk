@@ -1,6 +1,6 @@
 <script setup>
 import { ref, onMounted, onBeforeUnmount, nextTick } from 'vue';
-defineProps({ title: String, wide: Boolean });
+defineProps({ title: String, wide: Boolean, panelClass: String });
 const emit = defineEmits(['close']);
 const panel = ref();
 const previous = document.activeElement;
@@ -13,12 +13,12 @@ function keydown(event) {
         if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
     }
 }
-onMounted(async () => { document.addEventListener('keydown', keydown); await nextTick(); panel.value.querySelector('input, textarea, button')?.focus(); });
+onMounted(async () => { document.addEventListener('keydown', keydown); await nextTick(); (panel.value.querySelector('[autofocus]') || panel.value.querySelector('input, textarea, button'))?.focus(); });
 onBeforeUnmount(() => { document.removeEventListener('keydown', keydown); previous?.focus(); });
 </script>
 <template>
 <Teleport to="body"><div class="modal-backdrop" @mousedown.self="emit('close')">
-    <section ref="panel" class="modal" :class="{ wide }" role="dialog" aria-modal="true" :aria-label="title">
+    <section ref="panel" class="modal" :class="[{ wide }, panelClass]" role="dialog" aria-modal="true" :aria-label="title">
         <header><h2>{{ title }}</h2><button class="icon-button" @click="emit('close')" aria-label="Close dialog"><Icon name="x" /></button></header>
         <div class="modal-content"><slot /></div>
     </section>

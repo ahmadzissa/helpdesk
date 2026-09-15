@@ -129,6 +129,10 @@ class EmailRenderingTest extends TestCase
         $downloads = $response->json('ticket.messages.0.attachments');
         $this->assertStringEndsWith('/'.$message->id.'/1', $downloads[0]['url']);
         $this->assertStringEndsWith('/'.$message->id.'/2', $downloads[1]['url']);
+        $this->assertNull($downloads[0]['preview_url']);
+        $this->assertStringEndsWith('/'.$message->id.'/2/inline', $downloads[1]['preview_url']);
+        $this->get($downloads[1]['preview_url'])->assertOk()->assertHeader('Content-Type', 'image/png')
+            ->assertHeader('Content-Disposition', 'inline; filename=email-image');
         $this->assertStringContainsString('/'.$message->id.'/0/inline', $response->json('ticket.messages.0.body_html'));
         $this->assertStringNotContainsString('/'.$message->id.'/3/inline', $response->json('ticket.messages.0.body_html'));
         $this->get($downloads[0]['url'])->assertOk()->assertDownload('invoice.txt');
@@ -139,13 +143,20 @@ class EmailRenderingTest extends TestCase
 
     public function test_images_without_an_embedded_body_reference_remain_downloadable(): void
     {
+        Storage::fake('local');
         $file = ['name' => 'areviews-logo.png', 'mime' => 'image/png', 'size' => 68, 'path' => 'ticket-attachments/logo', 'content_id' => 'areviews-logo@relay.brand'];
+        Storage::disk('local')->put($file['path'], base64_decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jYtQAAAAASUVORK5CYII='));
         $this->actingAs(User::factory()->create());
         foreach (['inbound', 'outbound'] as $kind) {
             $message = Message::factory()->create(['kind' => $kind, 'body' => 'See attached logo', 'attachments' => [$file]]);
             $this->getJson('/api/v1/tickets/'.$message->ticket_id)->assertOk()->assertJsonCount(1, 'ticket.messages.0.attachments')
-                ->assertJsonPath('ticket.messages.0.attachments.0.name', 'areviews-logo.png');
+                ->assertJsonPath('ticket.messages.0.attachments.0.name', 'areviews-logo.png')
+                ->assertJsonPath('ticket.messages.0.attachments.0.preview_url', route('attachments.inline', ['message' => $message->id, 'index' => 0]));
         }
+        Storage::disk('local')->put($file['path'], '<svg onload="evil()"></svg>');
+        $this->getJson('/api/v1/tickets/'.$message->ticket_id)->assertOk()->assertJsonPath('ticket.messages.0.attachments.0.preview_url', null);
+        Storage::disk('local')->delete($file['path']);
+        $this->getJson('/api/v1/tickets/'.$message->ticket_id)->assertOk()->assertJsonPath('ticket.messages.0.attachments.0.preview_url', null);
     }
 
     public function test_translations_keep_safe_html_in_both_save_and_ticket_responses(): void

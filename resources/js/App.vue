@@ -5,7 +5,7 @@ import { useNavigation } from './useNavigation';
 import { appUrl } from './urls';
 import { state, syncPage, api, notify, initials, refreshSidebar, refreshSendingSafety } from './store';
 import Modal from './components/Modal.vue';
-import LanguagePicker from './components/LanguagePicker.vue';
+import CreateTicketForm from './components/CreateTicketForm.vue';
 import { createLocalMailPoller } from './localMailPolling';
 const route = useNavigation(), inertiaPage = usePage();
 watch(() => inertiaPage.props, props => syncPage(props), { immediate: true, flush: 'sync' });
@@ -39,6 +39,7 @@ watch([() => state.scope, () => state.refresh], () => {
 });
 function goView(v) { if (v === 'all') pollLocalMail(); router.visit(appUrl({ path: '/tickets', query: v === 'all' ? {} : { view: v } })); state.mobileNav = false; }
 async function createTicket() {
+    if (saving.value) return;
     saving.value = true;
     try {
         const result = await api('tickets', { method: 'POST', body: form });
@@ -99,13 +100,7 @@ onBeforeUnmount(() => { document.removeEventListener('keydown', shortcut); docum
     <div class="main-shell"><div v-if="state.workspace.sending_safety?.paused" class="sending-pause-banner" role="status"><Icon name="alert" :size="19" /><div><strong>Receive-only mode</strong><span>Outgoing email is paused until administrator review. Incoming mail continues.</span></div><Link :href="$appUrl('/settings?section=accounts')">Review sending</Link></div><slot /></div>
 </div>
 <Teleport to="body"><div v-if="state.toast" class="toast" :class="{ error: state.toastError }" role="status"><Icon :name="state.toastError ? 'alert' : 'solved'" /><span>{{ state.toast }}</span><button @click="state.toast = ''" aria-label="Dismiss notification"><Icon name="x" :size="16" /></button></div></Teleport>
-<Modal v-if="creating" title="New ticket" wide @close="!saving && (creating = false)">
-    <form @submit.prevent="createTicket" class="form-stack"><p class="form-description">Start a conversation. We’ll keep everything together here.</p><p v-if="createError" class="error-message" role="alert">{{ createError }}</p>
-        <div class="form-grid"><label>Requester email<input v-model="form.requester_email" type="email" required placeholder="customer@company.com" /></label><label>Name <span class="muted">(optional)</span><input v-model="form.requester_name" placeholder="Customer name" /></label></div>
-        <label>Subject<input v-model="form.subject" required maxlength="255" placeholder="What can we help with?" /></label><label>Message to the customer<textarea v-model="form.body" required rows="6" placeholder="Write your first message to the customer…" /></label>
-        <label v-if="state.workspace.translation?.outgoing">Customer language <span class="muted">(for translation)</span><LanguagePicker v-model="form.customer_language" label="New customer language" /><small class="muted">Choose a language for a new customer. Leave empty to use their previously saved language.</small></label>
-        <div class="form-grid"><label>Mailbox<select v-model="form.mailbox_id" @change="form.team_id = state.workspace.mailboxes.find(b => b.id === form.mailbox_id)?.team_id || null"><option :value="null">No mailbox</option><option v-for="box in state.workspace.mailboxes" :value="box.id" :key="box.id">{{ box.name }} · {{ box.email }}</option></select></label><label>Priority<select v-model="form.priority"><option v-for="p in ['Low', 'Normal', 'High', 'Urgent']" :key="p">{{ p }}</option></select></label></div>
-        <div class="form-actions"><button type="button" class="secondary-button" @click="creating = false" :disabled="saving">Cancel</button><button class="primary-button" :disabled="saving"><Icon name="plus" />{{ saving ? 'Creating…' : state.workspace.translation?.outgoing ? 'Create & prepare reply' : state.workspace.mailboxes.some(box => box.id === form.mailbox_id && box.sending_enabled) ? 'Create & send' : 'Create ticket' }}</button></div>
-    </form>
+<Modal v-if="creating" title="New ticket" wide panel-class="ticket-create-modal" @close="!saving && (creating = false)">
+    <CreateTicketForm :form="form" :workspace="state.workspace" :saving="saving" :error="createError" @submit="createTicket" @cancel="creating = false" />
 </Modal>
 </template>

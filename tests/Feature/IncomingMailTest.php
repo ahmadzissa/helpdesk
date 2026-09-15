@@ -2,6 +2,7 @@
 
 namespace Tests\Feature;
 
+use App\Jobs\SendTicketReply;
 use App\Jobs\SyncMailbox;
 use App\Models\Automation;
 use App\Models\CannedReply;
@@ -11,6 +12,7 @@ use App\Models\Ticket;
 use App\Models\User;
 use App\Services\IncomingMail;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\Storage;
 use PHPUnit\Framework\Attributes\DataProvider;
@@ -56,11 +58,11 @@ class IncomingMailTest extends TestCase
         $this->assertNotSame($ticket->id, $other->id);
     }
 
-    public function test_self_sent_bot_request_uses_customer_reply_to_without_automatic_replies(): void
+    public function test_self_sent_bot_request_sends_one_automatic_confirmation_to_customer_reply_to(): void
     {
         Queue::fake();
-        $box = Mailbox::factory()->create(['email' => 'support@example.com']);
-        $reply = CannedReply::factory()->create();
+        $box = Mailbox::factory()->create(['email' => 'support@example.com', 'sending_enabled' => true, 'smtp_host' => 'smtp.example.com']);
+        $reply = CannedReply::factory()->create(['body' => 'We received your request, {{name}}.']);
         Automation::factory()->create(['actions' => ['reply_id' => $reply->id]]);
         $importer = app(IncomingMail::class);
         $mail = $this->mail(['from_email' => ' SUPPORT@EXAMPLE.COM ', 'from_name' => 'Support Bot',
@@ -72,12 +74,43 @@ class IncomingMailTest extends TestCase
         $this->assertSame('Olivia Customer', $ticket->requester_name);
         $this->assertSame('olivia@example.com', $ticket->messages()->first()->author_email);
         $this->assertNull($importer->import($box, $mail));
-        $this->assertDatabaseCount('automation_runs', 0);
-        Queue::assertNothingPushed();
+        $this->assertDatabaseCount('automation_runs', 1);
+        $confirmation = $ticket->messages()->where('kind', 'outbound')->sole();
+        $this->assertSame('We received your request, Olivia Customer.', $confirmation->body);
+        Queue::assertPushed(SendTicketReply::class, 1);
+        Queue::assertPushed(SendTicketReply::class, fn (SendTicketReply $job): bool => $job->message->id === $confirmation->id);
+
+        $mailer = app('mail.manager')->mailer('array');
+        Mail::shouldReceive('build')->once()->andReturn($mailer);
+        (new SendTicketReply($confirmation))->handle();
+        $sent = $mailer->getSymfonyTransport()->messages()->sole()->getOriginalMessage();
+        $this->assertSame('olivia@example.com', $sent->getTo()[0]->getAddress());
+        $this->assertSame('support@example.com', $sent->getReplyTo()[0]->getAddress());
+        $this->assertSame('auto-replied', $sent->getHeaders()->get('Auto-Submitted')->getBodyAsString());
+        $this->assertNull($importer->import($box, $this->mail(['external_id' => $confirmation->fresh()->external_id,
+            'from_email' => $box->email, 'reply_to_email' => $box->email, 'automated' => true])));
 
         $followUp = $importer->import($box, $this->mail(['external_id' => 'follow-up@example.com', 'references' => ['message-1@example.com']]));
         $this->assertSame($ticket->id, $followUp->id);
-        $this->assertSame(2, $ticket->messages()->count());
+        $this->assertSame(3, $ticket->messages()->count());
+        $this->assertDatabaseCount('automation_runs', 1);
+        Queue::assertPushed(SendTicketReply::class, 1);
+    }
+
+    public function test_explicitly_automated_self_sent_mail_still_suppresses_confirmation(): void
+    {
+        Queue::fake();
+        $box = Mailbox::factory()->create(['sending_enabled' => true]);
+        $reply = CannedReply::factory()->create();
+        Automation::factory()->create(['actions' => ['reply_id' => $reply->id]]);
+
+        $ticket = app(IncomingMail::class)->import($box, $this->mail(['from_email' => $box->email,
+            'reply_to_email' => 'olivia@example.com', 'automated' => true]));
+
+        $this->assertSame('olivia@example.com', $ticket->requester_email);
+        $this->assertSame(1, $ticket->messages()->count());
+        $this->assertDatabaseCount('automation_runs', 0);
+        Queue::assertNothingPushed();
     }
 
     /** @return array<string, array{string}> */

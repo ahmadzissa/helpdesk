@@ -9,6 +9,7 @@ use App\Services\TranslationPolicy;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\JsonResource;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Storage;
 
 class TicketResource extends JsonResource
 {
@@ -61,7 +62,12 @@ class TicketResource extends JsonResource
                 $inlineIndexes = $content->inlineAttachmentIndexes($model);
                 $attachments = array_filter($message['attachments'] ?? [], fn (array $file, int $index): bool => ! in_array($index, $inlineIndexes, true), ARRAY_FILTER_USE_BOTH);
                 $message['attachments'] = array_map(function (array $file, int $index) use ($message) {
-                    return ['name' => $file['name'], 'size' => $file['size'], 'url' => route('attachments.download', ['message' => $message['id'], 'index' => $index])];
+                    $disk = Storage::disk('local');
+                    $isImage = $disk->exists($file['path']) && in_array($disk->mimeType($file['path']), EmailContent::IMAGE_TYPES, true);
+                    $parameters = ['message' => $message['id'], 'index' => $index];
+
+                    return ['name' => $file['name'], 'size' => $file['size'], 'url' => route('attachments.download', $parameters),
+                        'preview_url' => $isImage ? route('attachments.inline', $parameters) : null];
                 }, $attachments, array_keys($attachments));
 
                 return $message;
