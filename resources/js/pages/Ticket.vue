@@ -6,6 +6,7 @@ import { appUrl } from '../urls';
 import { createTicketRefresher } from '../ticketRefresh';
 import { ticketTimeline } from '../ticketTimeline';
 import EmailMessageBody from '../components/EmailMessageBody.vue';
+import ReplyEditor from '../components/ReplyEditor.vue';
 import PriorityIcon from '../components/PriorityIcon.vue';
 import { guardDraftNavigation } from '../draftNavigation';
 import { state, api, notify, initials, statusClass, refreshSendingSafety } from '../store';
@@ -32,7 +33,7 @@ const linkDialog = ref(false), linkLabel = ref(''), linkAddress = ref(''), linkE
 let linkSelection = { start: 0, end: 0 };
 const sendingAccounts = computed(() => state.workspace.mailboxes.filter(mailbox => mailbox.sending_enabled));
 const mailboxUnavailable = computed(() => !sendingAccounts.value.some(mailbox => mailbox.id === ticket.value?.mailbox_id));
-const inlineInput = ref(), uploadingImage = ref(false), deliveryMessage = ref(null), imagePreview = ref(false);
+const inlineInput = ref(), uploadingImage = ref(false), deliveryMessage = ref(null);
 const { enabled: translationEnabled, settings: translationSettings, original, errors: translationErrors, pending: pendingTranslations, translateMessage, translateAll, preview, previewReady, translating, translationError, prepare, prepareToSend, autoReply, automaticSend, detecting, languageError, detectLanguage, setLanguage } = useTicketTranslation(ticket, body, privateNote);
 const translationRequested = ref(false), reviewMessage = ref(null), writtenOriginal = reactive({});
 const requiresPreview = computed(() => translationEnabled.value && (autoReply.value || (!privateNote.value && translationRequested.value)));
@@ -48,7 +49,6 @@ async function showReplyTranslation() { details.value = true; await nextTick(); 
 async function previewReply() { translationRequested.value = true; await showReplyTranslation(); await prepare(); }
 async function reviewTranslation(message) { reviewMessage.value = message; }
 async function reviewedTranslation() { reviewMessage.value = null; await refreshTicket(); notify('Reply prepared for delivery'); }
-const inlinePreviews = computed(() => [...body.value.matchAll(/!\[([^\]]*)\]\((\/api\/v1\/inline-images\/[a-f0-9-]{36})\)/gi)].map(match => ({ name: match[1], url: appUrl(match[2]) })));
 const canned = computed(() => state.workspace.replies.filter(r => (r.title + r.shortcut + r.body).toLowerCase().includes(replySearch.value.toLowerCase())));
 let draftTimer, deliveryTimer, draftPromise = Promise.resolve(), loaded = false, skipNextDraft = false;
 let draftRevision = 0, savedDraftRevision = 0, ticketMutations = 0;
@@ -109,11 +109,9 @@ async function uploadImage(file) {
     if (!file || uploadingImage.value) return;
     if (!['image/png', 'image/jpeg', 'image/gif', 'image/webp'].includes(file.type) || file.size > 5 * 1024 * 1024) { notify('Choose a PNG, JPEG, GIF, or WebP image up to 5 MB.', true); return; }
     uploadingImage.value = true;
-    try { const data = new FormData(); data.append('image', file); const result = await api('tickets/' + ticket.value.id + '/inline-images', { method: 'POST', body: data }); insert('\n' + result.markdown + '\n'); imagePreview.value = true; notify('Image inserted into your reply'); }
+    try { const data = new FormData(); data.append('image', file); const result = await api('tickets/' + ticket.value.id + '/inline-images', { method: 'POST', body: data }); insert('\n' + result.markdown + '\n'); notify('Image inserted into your reply'); }
     catch (e) { notify(e.message, true); } finally { uploadingImage.value = false; if (inlineInput.value) inlineInput.value.value = ''; }
 }
-function pasteImage(event) { const item = [...event.clipboardData.items].find(item => item.type.startsWith('image/')); if (item) { event.preventDefault(); uploadImage(item.getAsFile()); } }
-function dropImage(event) { const file = [...(event.dataTransfer?.files || [])].find(file => file.type.startsWith('image/')); if (file) { event.preventDefault(); uploadImage(file); } }
 async function update(changes, message = 'Ticket updated') {
     ticketMutations++;
     ticketRefresher.invalidate();
@@ -166,9 +164,8 @@ async function send(sendOriginal = false) {
     } catch (e) { notify(e.message, true); } finally { sending.value = false; }
 }
 function insert(text) {
-    const start = editor.value?.selectionStart ?? body.value.length, end = editor.value?.selectionEnd ?? start;
-    body.value = body.value.slice(0, start) + text + body.value.slice(end);
-    setTimeout(() => { editor.value?.focus(); editor.value?.setSelectionRange(start + text.length, start + text.length); }, 0);
+    if (editor.value) editor.value.insert(text);
+    else body.value += text;
 }
 function format(before, after = before) {
     const start = editor.value?.selectionStart || 0, end = editor.value?.selectionEnd || 0;
@@ -258,8 +255,7 @@ async function saveDetails() {
         <div v-if="!ticket.merged_into_id" class="composer-wrap"><div class="ticket-body-content">
             <form class="composer" :class="{ 'private-composer': privateNote }" @submit.prevent="send">
                 <div class="composer-recipient"><span><Icon :name="privateNote ? 'lock' : 'mail'" :size="14" />{{ privateNote ? 'Private note for your team' : 'Reply to ' + ticket.requester_email }}</span><span class="draft-state">{{ draftState }}</span><button type="button" class="icon-button" @click="expanded = !expanded" :aria-label="expanded ? 'Collapse reply editor' : 'Expand reply editor'" :aria-expanded="expanded"><Icon :name="expanded ? 'minimize' : 'expand'" :size="15" /></button></div>
-                <textarea ref="editor" v-model="body" :disabled="sending" class="reply-editor" :class="{ expanded }" :placeholder="privateNote ? 'Leave a note for your team…' : 'Enter message'" aria-label="Write a reply" @keydown="shortcut" @paste="pasteImage" @dragover.prevent @drop="dropImage" required />
-                <div v-if="inlinePreviews.length" class="inline-previews"><button type="button" class="text-button" @click="imagePreview = !imagePreview">{{ imagePreview ? 'Hide' : 'Show' }} inline images ({{ inlinePreviews.length }})</button><div v-if="imagePreview"><img v-for="item in inlinePreviews" :key="item.url" :src="item.url" :alt="item.name" /></div></div>
+                <ReplyEditor ref="editor" v-model="body" :disabled="sending" :expanded="expanded" :placeholder="privateNote ? 'Leave a note for your team…' : 'Enter message'" @keydown="shortcut" @image="uploadImage" />
                 <div v-if="files.length" class="attached-files"><span v-for="(file, i) in files" :key="i"><Icon name="file" :size="13" />{{ file.name }}<button type="button" @click="files.splice(i, 1)" :aria-label="'Remove ' + file.name"><Icon name="x" :size="13" /></button></span></div>
                 <div v-if="formatVisible" class="format-toolbar" aria-label="Message formatting"><button type="button" @click="format('**')" title="Bold"><b>B</b></button><button type="button" @click="format('_')" title="Italic"><i>I</i></button><button type="button" @click="format('~~')" title="Strikethrough"><s>S</s></button><button type="button" @click="format('&#96;')" title="Code">&lt;/&gt;</button><span class="divider" /><button type="button" @click="insert('\n1. ')" title="Numbered list">1.</button><button type="button" @click="insert('\n• ')" title="Bulleted list">•</button><span class="divider" /><button type="button" @click="openLinkDialog" title="Insert link" aria-label="Insert link" :disabled="sending"><Icon name="link" :size="15" /></button><button type="button" @click="inlineInput.click()" title="Insert image" aria-label="Insert image" :disabled="uploadingImage || sending"><Icon name="image" :size="15" /></button></div>
                 <div class="composer-bottom"><div class="reply-options"><button type="button" class="icon-button" @click="inlineInput.click()" aria-label="Insert inline image" title="Insert inline image" :disabled="uploadingImage"><Icon :name="uploadingImage ? 'loader' : 'image'" /></button><label class="private-toggle"><input type="checkbox" v-model="privateNote" /><span class="toggle-track" />Private</label><span class="divider" /><button type="button" class="icon-button" @click="picker = true" aria-label="Insert canned response" title="Canned responses">#</button><button type="button" class="icon-button" @click="fileInput.click()" aria-label="Attach files" title="Attach files"><Icon name="attachment" /></button><button type="button" class="icon-button" @click="recording = true" aria-label="Screen recording design preview" title="Screen recording preview"><Icon name="video" /></button><button type="button" class="icon-button" @click="formatVisible = !formatVisible" title="Toggle formatting" aria-label="Toggle formatting"><u>A</u></button><button type="button" class="icon-button" @click="insert(state.user.preferences?.signature || '\n\nBest,\n' + state.user.name)" aria-label="Insert signature" title="Insert signature"><Icon name="edit" :size="15" /></button></div>

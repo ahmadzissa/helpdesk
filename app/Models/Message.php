@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Services\TicketCustomFields;
 use Illuminate\Database\Eloquent\Casts\Attribute;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
@@ -51,6 +52,10 @@ class Message extends Model
     {
         static::created(function (Message $message): void {
             Ticket::whereKey($message->ticket_id)->update(['workflow_activity_at' => now()]);
+            $ticket = Ticket::find($message->ticket_id);
+            if ($ticket) {
+                app(TicketCustomFields::class)->fillShopifyDomain($ticket, [$ticket->subject, $message->body, $message->email_html ?? '']);
+            }
         });
     }
 
