@@ -4,24 +4,8 @@
             <td align="center" style="padding:28px 14px">
                 <table role="presentation" width="600" cellpadding="0" cellspacing="0" border="0" style="width:100%;max-width:600px;border-collapse:collapse">
                     <tr>
-                        <td style="padding:0 0 24px">
-                            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
-                                <tr>
-                                    <td width="46" valign="middle"><img src="cid:areviews-logo@relay.brand" width="36" height="40" alt="Areviews" style="display:block;border:0;width:36px;height:40px"></td>
-                                    <td valign="middle" style="font-size:23px;font-weight:700;color:#262b36">Areviews</td>
-                                    <td align="right" valign="middle" style="font-size:12px;color:#646b79">Ticket #{{ $ticketNumber }}</td>
-                                </tr>
-                            </table>
-                        </td>
-                    </tr>
-                    <tr>
-                        <td style="padding:0 0 16px">
-                            <table role="presentation" cellpadding="0" cellspacing="0" border="0">
-                                <tr>
-                                    <td width="38" height="38" align="center" bgcolor="#6848ae" style="width:38px;height:38px;border-radius:50%;background-color:#6848ae;color:#ffffff;font-size:12px;font-weight:700">AR</td>
-                                    <td style="padding-left:11px;font-size:13px;font-weight:700;color:#262b36"><div dir="auto">{{ $sender }}</div></td>
-                                </tr>
-                            </table>
+                        <td align="center" style="padding:0 0 24px;text-align:center">
+                            <img src="cid:areviews-logo@relay.brand" width="36" height="40" alt="Areviews" style="display:block;margin:0 auto;border:0;width:36px;height:40px">
                         </td>
                     </tr>
                     <tr>

@@ -51,8 +51,6 @@ class OutgoingMail
 
         return view('outgoing-reply', [
             'content' => $content,
-            'sender' => $message->ticket->mailbox?->name ?: 'Areviews Support Team',
-            'ticketNumber' => $message->ticket_id,
             'previousContent' => $previous ? $this->messageHtml($previous, $email) : null,
             'previousAttribution' => $previous ? $this->attribution($previous) : null,
             'preferencesUrl' => $preferencesUrl,
