@@ -24,7 +24,9 @@ class SendTicketReply implements ShouldQueue
 
     public function __construct(public Message $message)
     {
-        if (app()->environment('local')) {
+        if ($message->rule_name !== null) {
+            $this->onConnection('database');
+        } elseif (app()->environment('local')) {
             $this->onConnection('deferred');
         }
     }

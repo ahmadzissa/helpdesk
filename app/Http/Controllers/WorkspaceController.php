@@ -31,7 +31,7 @@ class WorkspaceController extends Controller
 {
     public function bootstrap(Request $request): JsonResponse
     {
-        $settings = WorkspaceSetting::where('key', '!=', 'translation_key')->get()->pluck('value', 'key');
+        $settings = WorkspaceSetting::whereNotIn('key', ['translation_key', 'translation_server_key'])->get()->pluck('value', 'key');
         $settings['general'] = array_replace(['show_email_images' => true], $settings['general'] ?? []);
 
         return response()->json([

@@ -2,7 +2,7 @@
 
 return [
 
-    'google_translation' => ['browser_key' => env('GOOGLE_TRANSLATE_BROWSER_KEY', '')],
+    'google_translation' => ['browser_key' => env('GOOGLE_TRANSLATE_BROWSER_KEY', ''), 'server_key' => env('GOOGLE_TRANSLATE_SERVER_KEY', '')],
 
     /*
     |--------------------------------------------------------------------------

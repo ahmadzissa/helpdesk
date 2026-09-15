@@ -93,7 +93,7 @@ function delivery(ticket) {
     const message = ticket.latest_message;
     if (message?.kind !== 'outbound') return { label: message?.kind === 'note' ? 'Private note' : 'Customer reply', icon: message?.kind === 'note' ? 'lock' : 'mail' };
     if (message.opened_at && ['sent', 'delivered'].includes(message.delivery)) return { label: 'Email opened', icon: 'checks' };
-    return { label: { saved: 'Saved reply', sent: 'Sent', delivered: 'Delivered', suppressed: 'Suppressed', translation_pending: 'Needs translation', failed: 'Undelivered', queued: 'Queued', sending: 'Sending', held: 'Held for review' }[message.delivery] || 'Reply', icon: ['failed', 'held', 'suppressed', 'translation_pending'].includes(message.delivery) ? 'alert' : 'checks' };
+    return { label: { saved: 'Saved reply', sent: 'Sent', delivered: 'Delivered', suppressed: 'Suppressed', translation_pending: message.rule_name ? 'Translating automatically' : 'Needs translation', failed: 'Undelivered', queued: 'Queued', sending: 'Sending', held: 'Held for review' }[message.delivery] || 'Reply', icon: ['failed', 'held', 'suppressed', 'translation_pending'].includes(message.delivery) ? 'alert' : 'checks' };
 }
 </script>
 <template>

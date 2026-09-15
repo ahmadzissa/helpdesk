@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Jobs\TranslateAutomatedReply;
 use App\Models\Message;
 use App\Models\Ticket;
 use App\Models\WorkspaceSetting;
@@ -11,6 +12,8 @@ use Illuminate\Support\Facades\DB;
 class TranslationPolicy
 {
     public const HOLD_REASON = 'Browser translation required. Open this reply, translate it, and review the preview before sending.';
+
+    public const BACKGROUND_REASON = 'Translating automatically into the customer language. Delivery continues in the background.';
 
     public const LANGUAGE_RULE = 'regex:/^[a-z]{2,3}(-[A-Za-z0-9]{2,8}){0,2}$/';
 
@@ -24,6 +27,13 @@ class TranslationPolicy
         $stored = WorkspaceSetting::find('translation_key')?->value;
 
         return $stored ? Crypt::decryptString($stored['encrypted']) : (string) config('services.google_translation.browser_key', '');
+    }
+
+    public function serverKey(): string
+    {
+        $stored = WorkspaceSetting::find('translation_server_key')?->value;
+
+        return $stored ? Crypt::decryptString($stored['encrypted']) : ((string) config('services.google_translation.server_key', '') ?: $this->browserKey());
     }
 
     public function customer(Ticket $ticket): ?object
@@ -149,7 +159,14 @@ class TranslationPolicy
     public function holdIfNeeded(Message $message): void
     {
         if ($message->kind === 'outbound' && ! $this->ready($message)) {
-            $message->update(['delivery' => 'translation_pending', 'delivery_error' => self::HOLD_REASON]);
+            $automatic = $message->rule_name !== null && ! $message->attempt_id;
+            if ($automatic && ! in_array($message->delivery, ['queued', 'translation_pending'])) {
+                return;
+            }
+            $message->update(['delivery' => 'translation_pending', 'delivery_error' => $automatic ? self::BACKGROUND_REASON : self::HOLD_REASON]);
+            if ($automatic) {
+                TranslateAutomatedReply::dispatch($message->id)->afterCommit();
+            }
         }
     }
 

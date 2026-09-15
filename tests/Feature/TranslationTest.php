@@ -3,6 +3,7 @@
 namespace Tests\Feature;
 
 use App\Jobs\SendTicketReply;
+use App\Jobs\TranslateAutomatedReply;
 use App\Models\Mailbox;
 use App\Models\Message;
 use App\Models\Ticket;
@@ -313,7 +314,8 @@ class TranslationTest extends TestCase
         $this->postJson('/api/v1/messages/'.$message->id.'/prepare-translation', ['body' => 'Original reply', 'send_original' => true])
             ->assertUnprocessable();
         $this->assertSame('translation_pending', $message->fresh()->delivery);
-        Queue::assertNothingPushed();
+        Queue::assertNotPushed(SendTicketReply::class);
+        Queue::assertPushed(TranslateAutomatedReply::class, 1);
         $this->postJson('/api/v1/messages/'.$message->id.'/prepare-translation', $this->payload($ticket, 'Original reply'))
             ->assertOk()->assertJsonPath('delivery', 'queued');
         $this->assertSame('Pending', $ticket->fresh()->status);
@@ -386,13 +388,14 @@ class TranslationTest extends TestCase
         Queue::assertNothingPushed();
     }
 
-    public function test_queue_holds_automation_and_stale_translations_without_contacting_smtp(): void
+    public function test_queue_translates_automation_in_background_and_holds_stale_manual_translations(): void
     {
         $this->enableTranslation();
         $ticket = $this->ticket();
         $message = app(WorkflowActions::class)->message($ticket, 'Automatic follow-up', false, 'Timed follow-up');
         $this->assertSame('translation_pending', $message->delivery);
-        Queue::assertNothingPushed();
+        Queue::assertNotPushed(SendTicketReply::class);
+        Queue::assertPushed(TranslateAutomatedReply::class, 1);
         $payload = $this->payload($ticket);
         $reply = $ticket->messages()->create(['kind' => 'outbound', 'body' => $payload['body'], ...app(TranslationPolicy::class)->outgoing($ticket, $payload['body'], $payload['translation']), ...app(MailSafety::class)->prepare($ticket->mailbox)]);
         DB::table('customer_languages')->where('email', $ticket->requester_email)->update(['language' => 'ar']);
@@ -415,7 +418,8 @@ class TranslationTest extends TestCase
         $this->assertDatabaseCount('messages', 1);
         $this->assertSame('Hola, podemos ayudar.', $message->fresh()->body);
         $this->postJson('/api/v1/messages/'.$message->id.'/retry')->assertConflict();
-        Queue::assertNothingPushed();
+        Queue::assertNotPushed(SendTicketReply::class);
+        Queue::assertPushed(TranslateAutomatedReply::class, 1);
         app(MailSafety::class)->resume($admin->id, 'Reviewed delivery settings', 0);
         $ticket->update(['status' => 'Open']);
         $this->postJson('/api/v1/messages/'.$message->id.'/retry')->assertAccepted();
@@ -456,7 +460,7 @@ class TranslationTest extends TestCase
         $this->assertDatabaseCount('mail_delivery_attempts', 0);
     }
 
-    public function test_due_follow_ups_wait_for_browser_translation_without_creating_duplicate_messages(): void
+    public function test_due_follow_ups_queue_background_translation_without_creating_duplicate_messages(): void
     {
         $this->enableTranslation();
         $ticket = $this->ticket();
@@ -466,6 +470,7 @@ class TranslationTest extends TestCase
         $this->assertDatabaseCount('messages', 1);
         $this->assertSame('translation_pending', $ticket->messages()->first()->delivery);
         $this->assertDatabaseHas('follow_ups', ['state' => 'processed', 'result' => 'translation_pending']);
-        Queue::assertNothingPushed();
+        Queue::assertNotPushed(SendTicketReply::class);
+        Queue::assertPushed(TranslateAutomatedReply::class, 1);
     }
 }

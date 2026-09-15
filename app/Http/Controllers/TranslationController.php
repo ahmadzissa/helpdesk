@@ -19,7 +19,7 @@ class TranslationController extends Controller
 {
     public function config(TranslationPolicy $policy): JsonResponse
     {
-        return response()->json(['settings' => $policy->settings(), 'key' => $policy->browserKey()])
+        return response()->json(['settings' => $policy->settings(), 'key' => $policy->browserKey(), 'has_server_key' => $policy->serverKey() !== ''])
             ->header('Cache-Control', 'private, no-store');
     }
 
@@ -29,7 +29,7 @@ class TranslationController extends Controller
         $data = $request->validate(['incoming' => 'required|boolean', 'outgoing' => 'required|boolean',
             'auto_send' => 'sometimes|boolean',
             'target' => ['required', 'string', TranslationPolicy::LANGUAGE_RULE],
-            'key' => 'nullable|string|min:20|max:250']);
+            'key' => 'nullable|string|min:20|max:250', 'server_key' => 'nullable|string|min:20|max:250']);
         DB::transaction(function () use ($request, $data, $policy) {
             $settings = [...collect($data)->only(['incoming', 'outgoing', 'target'])->all(),
                 'auto_send' => $data['auto_send'] ?? $policy->settings()['auto_send'], 'revision' => $policy->settings()['revision'] + 1];
@@ -37,10 +37,13 @@ class TranslationController extends Controller
             if (! empty($data['key'])) {
                 WorkspaceSetting::updateOrCreate(['key' => 'translation_key'], ['value' => ['encrypted' => Crypt::encryptString($data['key'])]]);
             }
+            if (! empty($data['server_key'])) {
+                WorkspaceSetting::updateOrCreate(['key' => 'translation_server_key'], ['value' => ['encrypted' => Crypt::encryptString($data['server_key'])]]);
+            }
             Activity::create(['user_id' => $request->user()->id, 'description' => 'Updated email translation settings.']);
         });
 
-        return response()->json(['settings' => $policy->settings(), 'has_key' => $policy->browserKey() !== '']);
+        return response()->json(['settings' => $policy->settings(), 'has_key' => $policy->browserKey() !== '', 'has_server_key' => $policy->serverKey() !== '']);
     }
 
     public function language(Request $request, Ticket $ticket, TranslationPolicy $policy): JsonResponse

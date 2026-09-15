@@ -319,14 +319,20 @@ class TicketController extends Controller
         DB::transaction(function () use ($message) {
             $locked = Message::whereKey($message->id)->lockForUpdate()->firstOrFail();
             abort_unless(in_array($locked->delivery, ['failed', 'held']), 409, 'This message is already being processed.');
-            abort_unless(app(TranslationPolicy::class)->ready($locked), 409, 'Translation needs review. Translate this unsent reply, or compose a new reply if a delivery was already attempted.');
+            $backgroundTranslation = $locked->rule_name !== null && ! $locked->attempt_id;
+            abort_unless($backgroundTranslation || app(TranslationPolicy::class)->ready($locked), 409, 'Translation needs review. Translate this unsent reply, or compose a new reply if a delivery was already attempted.');
             $delivery = app(MailSafety::class)->prepare($locked->ticket->mailbox);
             abort_if($delivery['delivery'] === 'held', 409, 'Sending is paused. An administrator must review and reactivate it first.');
             $locked->update($delivery);
+            if ($backgroundTranslation) {
+                app(TranslationPolicy::class)->holdIfNeeded($locked);
+            }
             if ($locked->ticket->status === 'Open') {
                 $locked->ticket->update(['status' => 'Pending', 'resolved_at' => null]);
             }
-            SendTicketReply::dispatch($locked)->afterCommit();
+            if ($locked->delivery === 'queued') {
+                SendTicketReply::dispatch($locked)->afterCommit();
+            }
         });
 
         return response()->json(['message' => 'Delivery retry queued.'], 202);

@@ -23,6 +23,7 @@ export function automationAction(message) {
     if (message.delivery === 'sending') return 'is sending a message';
     if (message.delivery === 'failed') return 'created a message · delivery failed';
     if (message.delivery === 'suppressed') return 'created a message · delivery suppressed';
+    if (message.delivery === 'translation_pending' && message.rule_name) return 'is translating a message in the background';
     if (['held', 'translation_pending'].includes(message.delivery)) return 'created a message awaiting review';
     return 'created a message';
 }

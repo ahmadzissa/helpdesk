@@ -2,6 +2,8 @@
 
 namespace App\Console\Commands;
 
+use App\Jobs\TranslateAutomatedReply;
+use App\Models\Message;
 use App\Models\Ticket;
 use App\Services\AutomationEngine;
 use App\Services\FollowUpRunner;
@@ -21,6 +23,13 @@ class RunWorkflows extends Command
             return self::SUCCESS;
         }
         try {
+            Message::where('kind', 'outbound')->whereNotNull('rule_name')->whereNull('attempt_id')
+                ->where('delivery', 'translation_pending')->where('updated_at', '<=', now()->subMinutes(15))
+                ->chunkById(100, function ($messages): void {
+                    foreach ($messages as $message) {
+                        TranslateAutomatedReply::dispatch($message->id);
+                    }
+                });
             $followUps->run();
             Ticket::inInbox()->chunkById(100, function ($tickets) use ($engine) {
                 foreach ($tickets as $ticket) {

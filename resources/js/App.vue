@@ -43,7 +43,7 @@ async function createTicket() {
     try {
         const result = await api('tickets', { method: 'POST', body: form });
         const message = result.data.messages[0];
-        const needsTranslation = message?.delivery === 'translation_pending';
+        const needsTranslation = message?.delivery === 'translation_pending' && !message.rule_name;
         creating.value = false; state.refresh++;
         notify(needsTranslation ? 'Ticket created. Prepare the first reply for delivery.' : message?.delivery === 'queued' ? 'Ticket created. Message queued for delivery.' : message?.delivery === 'held' ? 'Ticket created. Message held because sending is paused.' : 'Ticket created. Message saved; connect a sending mailbox to deliver it.');
         router.visit(appUrl('/tickets/' + result.data.id) + (needsTranslation ? '?prepare_reply=' + message.id : ''));
